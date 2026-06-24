@@ -1,0 +1,48 @@
+# Gradle / Kotlin
+.gradle/
+build/
+out/
+.kotlin/
+kotlin-js-store/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config / secrets
+local.properties
+*.keystore
+*.jks
+key.properties
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+captures/
+
+# iOS / Xcode (for a future iosArm64/iosSimulatorArm64 target)
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+*.xcworkspace/*
+!*.xcworkspace/contents.xcworkspacedata
+xcuserdata/
+DerivedData/
+*.moved-aside
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+Pods/
+Carthage/Build/
+
+# Kotlin/JS & Wasm (for a future wasmJs target)
+node_modules/
