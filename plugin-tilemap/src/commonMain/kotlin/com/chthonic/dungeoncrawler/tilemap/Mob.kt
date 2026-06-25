@@ -1,10 +1,9 @@
 package com.chthonic.dungeoncrawler.tilemap
 
 /**
- * Default [GridPosition] implementation for anything that occupies a single cell, such as the
- * player or a monster.
+ * Any entity that occupies a single cell on the [TileMap] and can move: the player party or a monster.
  */
-class GridActor(
+class Mob(
     initialCellX: Int = 0,
     initialCellY: Int = 0,
     initialFacing: Facing = Facing.NORTH,

@@ -1,0 +1,16 @@
+# Map Conventions
+- coordinate system: Origin (0,0) at the top-left (northwest corner)
+- X coordinate increases east (right)
+- Y coordinate increases south (down)
+- "worm tunnel" design -- cell is either open space or a wall. i.e. a wall occupies a full cell
+- Cell types are: open, wall, special -- where special is stuff like doors, pits, stairs
+- Cell events are stuff like triggers, events, monsters, chests
+- "mob" includes both party and monster
+- mobs occupy a single cell
+- mobs face either north, south, east, west. no diagonals!
+- turns are 90 degrees
+- movement for party is forwards, backwards, strafe left, strafe right. no diagonals!
+- monsters can only move forwards and backwards
+- one cell per move
+- cell feels like a 1:1:1 3m^3 cube: 3m wide, 3m high, and 3m deep
+- outer ring of map is a wall
