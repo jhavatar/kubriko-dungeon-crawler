@@ -4,20 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Kotlin Multiplatform + Compose Multiplatform proof-of-concept for a grid-based, first-person dungeon crawler (think legacy "blobber" RPGs), built on the [Kubriko](https://github.com/pandulapeter/kubriko) game engine. Targets: desktop (JVM) and Android.
+A Kotlin Multiplatform + Compose Multiplatform proof-of-concept for a grid-based, first-person dungeon crawler (think legacy "blobber" RPGs), built on the [Kubriko](https://github.com/pandulapeter/kubriko) game engine. Targets: desktop (JVM), Android, web (Wasm via `wasmJs`), and iOS (`iosArm64`/`iosSimulatorArm64`).
 
 ## Commands
 
 All commands run from the repo root via the wrapper.
 
 ```
-./gradlew build                          # build + check everything (all modules, all targets)
-./gradlew :app:run                       # run the desktop app
-./gradlew :app:assembleDebug             # build the Android debug APK
-./gradlew :app:installDebug              # install debug APK on a connected device/emulator (adb)
-./gradlew :app:desktopMainClasses        # compile-check the desktop target only (fast)
-./gradlew :app:compileDebugKotlinAndroid # compile-check the Android target only (fast)
-./gradlew :app:lintDebug                 # Android Lint on the app module
+./gradlew build                              # build + check everything (all modules, all targets)
+./gradlew :app:run                           # run the desktop app
+./gradlew :app:assembleDebug                 # build the Android debug APK
+./gradlew :app:installDebug                  # install debug APK on a connected device/emulator (adb)
+./gradlew :app:desktopMainClasses            # compile-check the desktop target only (fast)
+./gradlew :app:compileDebugKotlinAndroid     # compile-check the Android target only (fast)
+./gradlew :app:lintDebug                     # Android Lint on the app module
+./gradlew :app:wasmJsBrowserDevelopmentRun   # run the web build with a dev server + auto-reload
+./gradlew :app:wasmJsBrowserDistribution     # produce the static web bundle in app/build/dist/wasmJs/productionExecutable
+./gradlew :app:linkDebugFrameworkIosArm64    # build the iOS device .framework (compile-check; no Xcode host project exists yet, see below)
 ```
 
 There are no test source sets in any module yet (no `*Test` directories) — there is nothing to run with `test`/`desktopTest`/`testDebugUnitTest` tasks today.
@@ -26,7 +29,7 @@ Code style follows `kotlin.code.style=official` (set in `gradle.properties`); th
 
 ## Module structure
 
-Three Gradle modules, each a Kotlin Multiplatform project with `androidTarget()` and `jvm("desktop")`:
+Three Gradle modules, each a Kotlin Multiplatform project targeting `androidTarget()`, `jvm("desktop")`, `wasmJs()`, `iosArm64()`, and `iosSimulatorArm64()` — exactly the platforms `io.github.pandulapeter.kubriko:engine` itself publishes (no plain `js()`, no `iosX64`, since the engine doesn't publish those variants).
 
 - **`plugin-tilemap`** — pure grid/data model, no engine rendering dependency beyond the Kubriko `Manager` base class. Key types:
   - `TileMap`: stores walls per cell *edge* (only north/west walls are stored per cell; south/east are read by checking the neighboring cell's north/west wall), so adjacent cells share one source of truth for the wall between them. Map boundary is walled by default.
@@ -34,7 +37,7 @@ Three Gradle modules, each a Kotlin Multiplatform project with `androidTarget()`
   - `Facing`: the 4 cardinal directions, with `opposite()`/`turnedLeft()`/`turnedRight()` helpers.
   - `TileMapManager`: a Kubriko `Manager` that owns the active `TileMap` and resolves move/turn legality against it (`canMoveTo`, `moveForward`, `moveBackward`).
 - **`plugin-dungeon-crawler`** — rendering layer, depends on `plugin-tilemap`. `DungeonRendererManager` is a Kubriko `Manager` that, every frame (`onUpdate`), diffs the viewer's `GridPosition` against the last known one and projects changes into Kubriko `Actor`s via the injected `ActorManager` (managers inject each other with the `by manager<T>()` delegate). Currently it only spawns/removes a single placeholder `ForwardWallActor` (a flat colored box) when a wall is/isn't directly ahead — the real fixed-frustum slot-based wall/floor/ceiling projection is the next step, not yet built.
-- **`app`** — the executable. `commonMain/App.kt` holds the shared `@Composable DungeonCrawlerApp()`, which wires up a `GridActor` (the viewer), a `TileMapManager`, and a `DungeonRendererManager` into one `Kubriko.newInstance(...)` engine instance, then renders it with `KubrikoViewport`. `desktopMain/Main.kt` and `androidMain/MainActivity.kt` are thin platform shells that just host that composable (a `Window` on desktop, a `ComponentActivity` on Android) — keep gameplay/engine-wiring changes in the shared composable, not the platform entry points.
+- **`app`** — the executable. `commonMain/App.kt` holds the shared `@Composable DungeonCrawlerApp()`, which wires up a `GridActor` (the viewer), a `TileMapManager`, and a `DungeonRendererManager` into one `Kubriko.newInstance(...)` engine instance, then renders it with `KubrikoViewport`. `desktopMain/Main.kt`, `androidMain/MainActivity.kt`, and `wasmJsMain/Main.kt` are thin platform shells that just host that composable (a `Window` on desktop, a `ComponentActivity` on Android, `ComposeViewport` on web) — keep gameplay/engine-wiring changes in the shared composable, not the platform entry points. `iosMain/MainViewController.kt` exposes a `MainViewController(): UIViewController` (via `ComposeUIViewController`) for the same purpose, but **there is no Xcode project in this repo to host it yet** — `./gradlew :app:linkDebugFrameworkIosArm64`/`linkDebugFrameworkIosSimulatorArm64` produce the `DungeonCrawlerApp.framework`, but actually running on a simulator/device requires creating an Xcode project that embeds it and calls `MainViewController()`, which hasn't been done.
 
 There is currently **no input handling anywhere** — the viewer's grid position/facing is set once at creation and never changes. `TileMapManager.moveForward()`/`moveBackward()` and `GridActor`'s mutable fields exist and are ready to be driven by input, but nothing calls them yet.
 
@@ -53,3 +56,7 @@ These are non-obvious and cost real trial-and-error to work out — read before 
 - **`android.useAndroidX=true` is required** in `gradle.properties` once any AndroidX dependency (e.g. `activity-compose`) is on the classpath, or the build fails with a `kmpPartiallyResolvedDependenciesChecker` error.
 - **`minSdk` is pinned to 29** because `io.github.pandulapeter.kubriko:engine-android` declares `minSdk 29` in its own manifest; the manifest merger hard-fails if the app's `minSdk` is lower.
 - **`.idea/workspace.xml`'s `autoReloadType` should be `ALL`.** If it's `NONE`, Android Studio won't pick up Gradle file changes made outside the IDE (e.g. by Claude Code or other terminal edits) until a manual sync — which can make it look like Android Studio is "missing" a target/run configuration that actually exists on disk.
+- **`wasmJs { ... }` requires `@OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)`** in every module's `build.gradle.kts` that declares the target — Kotlin 2.4.0 still gates the whole `wasmJs` Gradle DSL behind this opt-in.
+- **`ComposeViewport` (the web entry point, in `app/src/wasmJsMain/kotlin/.../Main.kt`) requires `@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)`** in Compose Multiplatform 1.11.1, or the build fails with "This API is experimental."
+- **`kotlin.native.ignoreDisabledTargets=true` is set in `gradle.properties`** because this is an Intel (`x86_64`) Mac: Kotlin/Native can still cross-compile/link `iosSimulatorArm64` *binaries* from this host, but can't *run* `iosSimulatorArm64Test`, which would otherwise print a warning on every build. (Kotlin/Native also prints a one-time "Deprecated Kotlin/Native Host" warning for `macos_x64` itself — that's just a heads-up that Kotlin/Native support for Intel Macs is being phased out, not an error.)
+- **The web build's output filename is pinned via `browser { commonWebpackConfig { outputFileName = "dungeoncrawler.js" } }`** in `app/build.gradle.kts`, and `wasmJsMain/resources/index.html`'s `<script src="dungeoncrawler.js">` must match it — the default webpack output name is derived from the Gradle module path and is less predictable.
