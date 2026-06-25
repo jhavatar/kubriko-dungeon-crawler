@@ -13,6 +13,7 @@ import com.pandulapeter.kubriko.manager.Manager
  */
 class DungeonRendererManager(
     private val viewer: GridPosition,
+    var renderMode: RenderMode = RenderMode.TEXTURED,
     isLoggingEnabled: Boolean = false,
     instanceNameForLogging: String? = null,
 ) : Manager(
@@ -37,7 +38,7 @@ class DungeonRendererManager(
         lastFacing = viewer.facing
         val isWallAhead = !tileMapManager.canMoveTo(viewer)
         if (isWallAhead && forwardWallActor == null) {
-            val actor = ForwardWallActor()
+            val actor = ForwardWallActor(renderMode = { renderMode })
             forwardWallActor = actor
             actorManager.add(actor)
         } else if (!isWallAhead) {

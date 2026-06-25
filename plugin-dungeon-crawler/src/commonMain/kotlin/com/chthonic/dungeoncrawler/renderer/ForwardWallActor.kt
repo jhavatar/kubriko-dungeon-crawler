@@ -2,6 +2,7 @@ package com.chthonic.dungeoncrawler.renderer
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import com.pandulapeter.kubriko.actor.Actor
 import com.pandulapeter.kubriko.actor.body.BoxBody
 import com.pandulapeter.kubriko.actor.traits.Visible
@@ -13,7 +14,7 @@ import com.pandulapeter.kubriko.types.SceneSize
  * Placeholder visualization of a wall directly ahead of the viewer. Stands in for the real
  * slot-based wall/floor/ceiling projection until [DungeonRendererManager] grows one.
  */
-class ForwardWallActor : Actor, Visible {
+class ForwardWallActor(private val renderMode: () -> RenderMode) : Actor, Visible {
 
     override val body = BoxBody(
         initialPosition = SceneOffset.Zero,
@@ -21,8 +22,15 @@ class ForwardWallActor : Actor, Visible {
     )
     override val layerIndex = 0
 
-    override fun DrawScope.draw() = drawRect(
-        color = Color(0xFF6B4F3B),
-        size = body.size.raw,
-    )
+    override fun DrawScope.draw() = when (renderMode()) {
+        RenderMode.WIREFRAME -> drawRect(
+            color = Color(0xFF6B4F3B),
+            size = body.size.raw,
+            style = Stroke(width = 4f),
+        )
+        RenderMode.TEXTURED -> drawRect(
+            color = Color(0xFF6B4F3B),
+            size = body.size.raw,
+        )
+    }
 }

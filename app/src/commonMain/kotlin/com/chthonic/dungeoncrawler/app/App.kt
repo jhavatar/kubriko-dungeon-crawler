@@ -1,6 +1,7 @@
 package com.chthonic.dungeoncrawler.app
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import com.chthonic.dungeoncrawler.renderer.DungeonRendererManager
 import com.chthonic.dungeoncrawler.tilemap.Facing
@@ -10,6 +11,7 @@ import com.chthonic.dungeoncrawler.tilemap.TileMapManager
 import com.pandulapeter.kubriko.Kubriko
 import com.pandulapeter.kubriko.KubrikoViewport
 import com.pandulapeter.kubriko.keyboardInput.KeyboardInputManager
+import com.pandulapeter.kubriko.logger.Logger
 
 @Composable
 fun DungeonCrawlerApp() {
@@ -36,5 +38,11 @@ fun DungeonCrawlerApp() {
             instanceNameForLogging = "DungeonCrawlerPoc",
         )
     }
+    LaunchedEffect(Unit) {
+        Logger.latestEntry.collect { entry ->
+            println("[${entry.source}] ${entry.message}${entry.details?.let { " — $it" } ?: ""}")
+        }
+    }
+
     KubrikoViewport(kubriko = kubriko)
 }
