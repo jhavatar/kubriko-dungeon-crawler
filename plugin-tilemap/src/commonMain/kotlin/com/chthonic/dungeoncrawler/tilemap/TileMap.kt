@@ -23,4 +23,31 @@ class TileMap(
     fun isInBounds(x: Int, y: Int): Boolean = x in 0 until width && y in 0 until height
 
     private fun indexOf(x: Int, y: Int) = y * width + x
+
+    companion object {
+        /**
+         * Parses a multiline string into a [TileMap]. Each character maps to a [CellType]:
+         *   '#' → WALL, '.' → OPEN, 'S' → SPECIAL
+         * All rows must have the same length. Outer ring need not be '#' in the string but will
+         * be forced to WALL by the default cell initialisation.
+         */
+        fun fromString(map: String): TileMap {
+            val rows = map.trimIndent().lines().filter { it.isNotEmpty() }
+            val height = rows.size
+            val width = rows.first().length
+            require(rows.all { it.length == width }) { "All rows must have the same length" }
+            val tileMap = TileMap(width, height)
+            rows.forEachIndexed { y, row ->
+                row.forEachIndexed { x, char ->
+                    val type = when (char) {
+                        '#' -> CellType.WALL
+                        'S' -> CellType.SPECIAL
+                        else -> CellType.OPEN
+                    }
+                    tileMap.setCellType(x, y, type)
+                }
+            }
+            return tileMap
+        }
+    }
 }

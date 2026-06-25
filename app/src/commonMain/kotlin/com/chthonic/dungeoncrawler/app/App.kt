@@ -9,16 +9,30 @@ import com.chthonic.dungeoncrawler.tilemap.TileMap
 import com.chthonic.dungeoncrawler.tilemap.TileMapManager
 import com.pandulapeter.kubriko.Kubriko
 import com.pandulapeter.kubriko.KubrikoViewport
+import com.pandulapeter.kubriko.keyboardInput.KeyboardInputManager
 
 @Composable
 fun DungeonCrawlerApp() {
-    val viewer = remember { Mob(initialCellX = 2, initialCellY = 2, initialFacing = Facing.NORTH) }
-    val tileMapManager = remember { TileMapManager(initialTileMap = TileMap(width = 5, height = 5)) }
-    val dungeonRendererManager = remember { DungeonRendererManager(viewer = viewer) }
+    val viewer = remember { Mob(initialCellX = 2, initialCellY = 3, initialFacing = Facing.NORTH) }
+    val tileMapManager = remember {
+        TileMapManager(
+            initialTileMap = TileMap.fromString(
+                """
+                #####
+                #...#
+                #.#.#
+                #...#
+                #####
+                """
+            )
+        )
+    }
     val kubriko = remember {
         Kubriko.newInstance(
             tileMapManager,
-            dungeonRendererManager,
+            DungeonRendererManager(viewer = viewer),
+            PlayerManager(viewer = viewer, tileMapManager = tileMapManager, isLoggingEnabled = true),
+            KeyboardInputManager.newInstance(),
             instanceNameForLogging = "DungeonCrawlerPoc",
         )
     }

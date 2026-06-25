@@ -33,6 +33,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(libs.kubriko.engine)
+            implementation(libs.kubriko.keyboard.input)
             implementation(project(":plugin-tilemap"))
             implementation(project(":plugin-dungeon-crawler"))
         }
