@@ -1,5 +1,5 @@
 # Map Conventions
-- coordinate system: Origin (0,0) at the top-left (northwest corner)
+- coordinate system: each cell has a unique coordinate with origin (0,0) at the top-left (northwest corner)
 - X coordinate increases east (right)
 - Y coordinate increases south (down)
 - "worm tunnel" design -- cell is either open space or a wall. i.e. a wall occupies a full cell
