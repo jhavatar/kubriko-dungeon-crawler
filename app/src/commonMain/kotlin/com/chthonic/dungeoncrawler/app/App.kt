@@ -1,5 +1,6 @@
 package com.chthonic.dungeoncrawler.app
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,8 +14,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.chthonic.dungeoncrawler.renderer.DungeonRendererManager
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.Mob
@@ -72,14 +78,36 @@ fun DungeonCrawlerApp() {
         }
     }
 
+    val textMeasurer = rememberTextMeasurer()
+    val desiredWalls by dungeonRenderer.desiredWalls
+
     Box(modifier = Modifier.fillMaxSize()) {
-        KubrikoViewport(
-            kubriko = kubriko,
+        // Inner box matches the viewport so the overlay Canvas is the same size.
+        Box(
             modifier = Modifier
                 .fillMaxSize(0.75f)
-                .align(Alignment.Center)
-                .border(2.dp, Color(0xFF8B6B52)),
-        )
+                .align(Alignment.Center),
+        ) {
+            KubrikoViewport(
+                kubriko = kubriko,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .border(2.dp, Color(0xFF8B6B52)),
+            )
+            // Overlay: draw the (col, depth) label at each front-wall slot centre.
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                desiredWalls.forEach { (col, depth) ->
+                    val slotWidth = size.width * dungeonRenderer.viewDistance / (dungeonRenderer.fovWidth * depth)
+                    val centerX = size.width / 2f + col * slotWidth
+                    val centerY = size.height / 2f
+                    val layout = textMeasurer.measure(
+                        text = "$col,$depth",
+                        style = TextStyle(fontSize = 12.sp, color = Color.Yellow),
+                    )
+                    drawText(layout, topLeft = Offset(centerX - layout.size.width / 2f, centerY - layout.size.height / 2f))
+                }
+            }
+        }
         MinimapOverlay(
             tileMap = tileMapManager.tileMap,
             cellX = viewerSnapshot.cellX,
@@ -87,6 +115,7 @@ fun DungeonCrawlerApp() {
             facing = viewerSnapshot.facing,
             fovWidth = dungeonRenderer.fovWidth,
             viewDistance = dungeonRenderer.viewDistance,
+            desiredWalls = desiredWalls,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(8.dp)

@@ -6,6 +6,8 @@ import com.chthonic.dungeoncrawler.tilemap.GridPosition
 import com.chthonic.dungeoncrawler.tilemap.TileMapManager
 import com.pandulapeter.kubriko.manager.ActorManager
 import com.pandulapeter.kubriko.manager.Manager
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import com.pandulapeter.kubriko.manager.ViewportManager
 
 class DungeonRendererManager(
@@ -33,6 +35,11 @@ class DungeonRendererManager(
     private var lastViewH: Float = 0f
 
     private val fovHalf = fovWidth / 2f
+
+    // The set of (col, depth) frustum-slot coordinates that currently have a front wall actor.
+    // Exposed as Compose State so the minimap and viewport overlays recompose automatically.
+    private val _desiredWalls = mutableStateOf<Set<Pair<Int, Int>>>(emptySet())
+    val desiredWalls: State<Set<Pair<Int, Int>>> = _desiredWalls
 
     override fun onUpdate(deltaTimeInMilliseconds: Int) {
         val viewW = (viewportManager.bottomRight.value.x - viewportManager.topLeft.value.x).raw
@@ -66,7 +73,7 @@ class DungeonRendererManager(
         log("updateSlots")
         val right = viewer.facing.turnedRight()
         // Build the set of (col, depth) pairs that should have a WallSlotActor this frame.
-        val desiredWalls = mutableSetOf<Pair<Int, Int>>()
+        val newWalls = mutableSetOf<Pair<Int, Int>>()
 
         // Each column is a vertical strip of the viewport centred on col * slotWidth.
         for (col in -(fovWidth / 2)..(fovWidth / 2)) {
@@ -101,7 +108,7 @@ class DungeonRendererManager(
                     val cellY = viewer.cellY + depth * viewer.facing.dy + col * right.dy
                     if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
                         log("updateSlots", "add wal $cellX, $cellY")
-                        desiredWalls.add(col to depth)
+                        newWalls.add(col to depth)
                         // Mark this interval as covered so nothing behind it is rendered.
                         mergeInto(covered, visLeft to visRight)
                     }
@@ -113,8 +120,11 @@ class DungeonRendererManager(
             }
         }
 
+        // Publish the new set so Compose overlays recompose immediately.
+        _desiredWalls.value = newWalls
+
         // Remove actors for (col, depth) pairs that are no longer visible.
-        val keysToRemove = wallActors.keys.filter { it !in desiredWalls }
+        val keysToRemove = wallActors.keys.filter { it !in newWalls }
         keysToRemove.forEach { key ->
             wallActors.remove(key)?.let { actorManager.remove(it) }
         }
@@ -124,7 +134,7 @@ class DungeonRendererManager(
         // each slot is viewW/fovWidth wide and viewH/D tall, centred at col * slotWidth.
         // layerIndex: closer walls use a higher index so they paint on top of farther ones;
         // the +1 keeps front walls above same-depth side walls from updateSideWalls.
-        desiredWalls.filter { it !in wallActors }.forEach { key ->
+        newWalls.filter { it !in wallActors }.forEach { key ->
             val (col, depth) = key
             val slotHeight = viewH / depth
             val slotWidth = viewW * viewDistance / (fovWidth * depth)

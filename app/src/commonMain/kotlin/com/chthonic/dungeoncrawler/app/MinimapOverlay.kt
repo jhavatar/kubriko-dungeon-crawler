@@ -8,6 +8,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.sp
 import com.chthonic.dungeoncrawler.tilemap.CellType
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.TileMap
@@ -20,8 +24,10 @@ fun MinimapOverlay(
     facing: Facing,
     fovWidth: Int,
     viewDistance: Int,
+    desiredWalls: Set<Pair<Int, Int>> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
+    val textMeasurer = rememberTextMeasurer()
     Canvas(modifier = modifier) {
         val cellSize = minOf(size.width / tileMap.width, size.height / tileMap.height)
         val originX = (size.width - tileMap.width * cellSize) / 2f
@@ -68,6 +74,20 @@ fun MinimapOverlay(
         }
         drawPath(frustumPath, color = Color(0x26FFEE44))
         drawPath(frustumPath, color = Color(0xCCFFEE44), style = Stroke(width = 1f))
+
+        // Highlight each front-wall slot and label it with its (col, depth) frustum coordinates.
+        val labelStyle = TextStyle(fontSize = 6.sp, color = Color.Black)
+        desiredWalls.forEach { (col, depth) ->
+            val wCellX = cellX + depth * facing.dx + col * right.dx
+            val wCellY = cellY + depth * facing.dy + col * right.dy
+            val rx = originX + wCellX * cellSize + 1f
+            val ry = originY + wCellY * cellSize + 1f
+            drawRect(Color(0xCCFFEE00), topLeft = Offset(rx, ry), size = Size(cellSize - 2f, cellSize - 2f))
+            val layout = textMeasurer.measure("$col,$depth", style = labelStyle)
+            val lx = originX + (wCellX + 0.5f) * cellSize - layout.size.width / 2f
+            val ly = originY + (wCellY + 0.5f) * cellSize - layout.size.height / 2f
+            drawText(layout, topLeft = Offset(lx, ly))
+        }
 
         val partyCx = originX + (cellX + 0.5f) * cellSize
         val partyCy = originY + (cellY + 0.5f) * cellSize
