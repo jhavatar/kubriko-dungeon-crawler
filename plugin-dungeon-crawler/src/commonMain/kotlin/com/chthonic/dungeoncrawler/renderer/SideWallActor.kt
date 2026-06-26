@@ -18,7 +18,7 @@ import com.pandulapeter.kubriko.types.SceneSize
  * far edge), projecting as a trapezoid: wider and taller near the party, narrower and shorter
  * further away.  The BoxBody covers the bounding rectangle; draw() fills the actual trapezoid.
  */
-class SideWallSlotActor(
+class SideWallActor(
     xNear: Float,
     xFar: Float,
     private val yNearHalf: Float,

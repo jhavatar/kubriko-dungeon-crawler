@@ -26,8 +26,8 @@ class DungeonRendererManager(
     private val actorManager by manager<ActorManager>()
     private val viewportManager by manager<ViewportManager>()
 
-    private val wallActors = mutableMapOf<Pair<Int, Int>, WallSlotActor>()
-    private val sideWallActors = mutableMapOf<Pair<Int, Int>, SideWallSlotActor>()
+    private val wallActors = mutableMapOf<Pair<Int, Int>, FrontWallActor>()
+    private val sideWallActors = mutableMapOf<Pair<Int, Int>, SideWallActor>()
     private var lastCellX: Int? = null
     private var lastCellY: Int? = null
     private var lastFacing: Facing? = null
@@ -67,12 +67,12 @@ class DungeonRendererManager(
         updateSideWalls(viewW, viewH)
     }
 
-    // Determines which front-facing wall rectangles are visible and keeps their WallSlotActors
+    // Determines which front-facing wall rectangles are visible and keeps their FrontWallActors
     // in sync. Called every frame when the viewer position/facing or viewport size changes.
     private fun updateFrontWalls(viewW: Float, viewH: Float) {
         log("updateFrontWalls")
         val right = viewer.facing.turnedRight()
-        // Build the set of (lat, depth) pairs that should have a WallSlotActor this frame.
+        // Build the set of (lat, depth) pairs that should have a FrontWallActor this frame.
         val newWalls = mutableSetOf<Pair<Int, Int>>()
 
         // Each lat is a lateral screen-space offset from centre: lat=0 is straight ahead, positive
@@ -139,7 +139,7 @@ class DungeonRendererManager(
             val (lat, dep) = key
             val slotHeight = viewH / dep
             val slotWidth = viewW * viewDistance / (fovWidth * dep)
-            val actor = WallSlotActor(
+            val actor = FrontWallActor(
                 centerX = lat * slotWidth,
                 width = slotWidth,
                 height = slotHeight,
@@ -153,14 +153,14 @@ class DungeonRendererManager(
         }
     }
 
-    // Determines which side-wall trapezoids are visible and keeps their SideWallSlotActors
+    // Determines which side-wall trapezoids are visible and keeps their SideWallActors
     // in sync. A side wall is the face running parallel to the viewing direction that appears
     // whenever an open cell and a wall cell share a lateral boundary. Called every frame alongside
     // updateFrontWalls when the viewer position/facing or viewport size changes.
     private fun updateSideWalls(viewW: Float, viewH: Float) {
         log("updateSideWalls")
         val right = viewer.facing.turnedRight()
-        // Build the set of (k, depth) pairs that should have a SideWallSlotActor this frame.
+        // Build the set of (k, depth) pairs that should have a SideWallActor this frame.
         val desiredSideWalls = mutableSetOf<Pair<Int, Int>>()
 
         // k is latBoundaryTimes2: the boundary between leftLat=(k-1)/2 and rightLat=(k+1)/2
@@ -210,7 +210,7 @@ class DungeonRendererManager(
             val xFar = xB * viewW * viewDistance / (fovWidth * (depth + 1))
             val yNearHalf = if (depth == 0) viewH / 2f else viewH / (2f * depth)
             val yFarHalf = viewH / (2f * (depth + 1))
-            val actor = SideWallSlotActor(
+            val actor = SideWallActor(
                 xNear = xNear,
                 xFar = xFar,
                 yNearHalf = yNearHalf,

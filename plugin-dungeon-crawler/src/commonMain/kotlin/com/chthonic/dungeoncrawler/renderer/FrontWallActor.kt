@@ -10,7 +10,7 @@ import com.pandulapeter.kubriko.helpers.extensions.sceneUnit
 import com.pandulapeter.kubriko.types.SceneOffset
 import com.pandulapeter.kubriko.types.SceneSize
 
-class WallSlotActor(
+class FrontWallActor(
     centerX: Float,
     width: Float,
     height: Float,
