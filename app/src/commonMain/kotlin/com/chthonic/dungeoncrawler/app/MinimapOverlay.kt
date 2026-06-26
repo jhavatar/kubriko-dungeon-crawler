@@ -24,7 +24,8 @@ fun MinimapOverlay(
     facing: Facing,
     fovWidth: Int,
     viewDistance: Int,
-    desiredWalls: Set<Pair<Int, Int>> = emptySet(),
+    frontWallCells: Map<Pair<Int, Int>, String> = emptyMap(),
+    sideWallCells: Map<Pair<Int, Int>, String> = emptyMap(),
     modifier: Modifier = Modifier,
 ) {
     val textMeasurer = rememberTextMeasurer()
@@ -75,18 +76,38 @@ fun MinimapOverlay(
         drawPath(frustumPath, color = Color(0x26FFEE44))
         drawPath(frustumPath, color = Color(0xCCFFEE44), style = Stroke(width = 1f))
 
-        // Highlight each front-wall slot and label it with its (lat, depth) frustum coordinates.
         val labelStyle = TextStyle(fontSize = 6.sp, color = Color.Black)
-        desiredWalls.forEach { (lat, dep) ->
-            val wCellX = cellX + dep * facing.dx + lat * right.dx
-            val wCellY = cellY + dep * facing.dy + lat * right.dy
-            val rx = originX + wCellX * cellSize + 1f
-            val ry = originY + wCellY * cellSize + 1f
-            drawRect(Color(0xCCFFEE00), topLeft = Offset(rx, ry), size = Size(cellSize - 2f, cellSize - 2f))
-            val layout = textMeasurer.measure("$lat,$dep", style = labelStyle)
-            val lx = originX + (wCellX + 0.5f) * cellSize - layout.size.width / 2f
-            val ly = originY + (wCellY + 0.5f) * cellSize - layout.size.height / 2f
-            drawText(layout, topLeft = Offset(lx, ly))
+
+        // Highlight each visible side wall cell (cyan) with its (k,depth) label.
+        // Skip cells already covered by a front wall highlight to avoid colour mixing.
+        sideWallCells.forEach { (cellPos, label) ->
+            if (cellPos in frontWallCells) return@forEach
+            val (wCellX, wCellY) = cellPos
+            drawRect(
+                Color(0xCC00EEFF),
+                topLeft = Offset(originX + wCellX * cellSize + 1f, originY + wCellY * cellSize + 1f),
+                size = Size(cellSize - 2f, cellSize - 2f),
+            )
+            val layout = textMeasurer.measure(label, style = labelStyle)
+            drawText(layout, topLeft = Offset(
+                originX + (wCellX + 0.5f) * cellSize - layout.size.width / 2f,
+                originY + (wCellY + 0.5f) * cellSize - layout.size.height / 2f,
+            ))
+        }
+
+        // Highlight each visible front wall cell (yellow) with its (lat,depth) label.
+        frontWallCells.forEach { (cellPos, label) ->
+            val (wCellX, wCellY) = cellPos
+            drawRect(
+                Color(0xCCFFEE00),
+                topLeft = Offset(originX + wCellX * cellSize + 1f, originY + wCellY * cellSize + 1f),
+                size = Size(cellSize - 2f, cellSize - 2f),
+            )
+            val layout = textMeasurer.measure(label, style = labelStyle)
+            drawText(layout, topLeft = Offset(
+                originX + (wCellX + 0.5f) * cellSize - layout.size.width / 2f,
+                originY + (wCellY + 0.5f) * cellSize - layout.size.height / 2f,
+            ))
         }
 
         val partyCx = originX + (cellX + 0.5f) * cellSize

@@ -1,13 +1,16 @@
 package com.chthonic.dungeoncrawler.renderer
 
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.sp
 import com.chthonic.dungeoncrawler.tilemap.CellType
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.GridPosition
 import com.chthonic.dungeoncrawler.tilemap.TileMapManager
 import com.pandulapeter.kubriko.manager.ActorManager
 import com.pandulapeter.kubriko.manager.Manager
-import androidx.compose.runtime.State
-import androidx.compose.runtime.mutableStateOf
 import com.pandulapeter.kubriko.manager.ViewportManager
 
 class DungeonRendererManager(
@@ -15,6 +18,7 @@ class DungeonRendererManager(
     val fovWidth: Int = 4,
     val viewDistance: Int = 4,
     var renderMode: RenderMode = RenderMode.TEXTURED,
+    private val textMeasurer: TextMeasurer? = null,
     isLoggingEnabled: Boolean = false,
     instanceNameForLogging: String? = null,
 ) : Manager(
@@ -36,10 +40,14 @@ class DungeonRendererManager(
 
     private val fovHalf = fovWidth / 2f
 
-    // The set of (lat, depth) frustum-slot coordinates that currently have a front wall actor.
-    // Exposed as Compose State so the minimap and viewport overlays recompose automatically.
-    private val _desiredWalls = mutableStateOf<Set<Pair<Int, Int>>>(emptySet())
-    val desiredWalls: State<Set<Pair<Int, Int>>> = _desiredWalls
+    // Map from (mapCellX, mapCellY) → debug label for each visible front wall cell.
+    // Coordinates are resolved in map space at compute time so the minimap can use them directly.
+    private val _frontWallCells = mutableStateOf<Map<Pair<Int, Int>, String>>(emptyMap())
+    val frontWallCells: State<Map<Pair<Int, Int>, String>> = _frontWallCells
+
+    // Map from (mapCellX, mapCellY) → debug label for each visible side wall cell.
+    private val _sideWallCells = mutableStateOf<Map<Pair<Int, Int>, String>>(emptyMap())
+    val sideWallCells: State<Map<Pair<Int, Int>, String>> = _sideWallCells
 
     override fun onUpdate(deltaTimeInMilliseconds: Int) {
         val viewW = (viewportManager.bottomRight.value.x - viewportManager.topLeft.value.x).raw
@@ -72,8 +80,10 @@ class DungeonRendererManager(
     private fun updateFrontWalls(viewW: Float, viewH: Float) {
         log("updateFrontWalls")
         val right = viewer.facing.turnedRight()
-        // Build the set of (lat, depth) pairs that should have a FrontWallActor this frame.
+        // Build the set of (lat, depth) pairs that should have a FrontWallActor this frame,
+        // and a parallel map of map-space cell coordinates for the minimap overlay.
         val newWalls = mutableSetOf<Pair<Int, Int>>()
+        val newFrontWallCells = mutableMapOf<Pair<Int, Int>, String>()
 
         // Each lat is a lateral screen-space offset from centre: lat=0 is straight ahead, positive
         // lats are to the viewer's right, negative to the left — independent of which map direction that is.
@@ -110,6 +120,7 @@ class DungeonRendererManager(
                     if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
                         log("updateFrontWalls", "add wall $cellX, $cellY")
                         newWalls.add(lat to depth)
+                        newFrontWallCells[cellX to cellY] = "$lat,$depth"
                         // Mark this interval as covered so nothing behind it is rendered.
                         mergeInto(covered, visLeft to visRight)
                     }
@@ -121,8 +132,8 @@ class DungeonRendererManager(
             }
         }
 
-        // Publish the new set so Compose overlays recompose immediately.
-        _desiredWalls.value = newWalls
+        // Publish map-space coordinates so the minimap can highlight cells without conversion.
+        _frontWallCells.value = newFrontWallCells
 
         // Remove actors for (lat, depth) pairs that are no longer visible.
         val keysToRemove = wallActors.keys.filter { it !in newWalls }
@@ -147,6 +158,10 @@ class DungeonRendererManager(
                 viewDistance = viewDistance,
                 renderMode = { renderMode },
                 layerIndex = (viewDistance - dep) * 2 + 1,
+                debugLabel = textMeasurer?.measure(
+                    "$lat,$dep",
+                    style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Yellow),
+                ),
             )
             wallActors[key] = actor
             actorManager.add(actor)
@@ -160,8 +175,10 @@ class DungeonRendererManager(
     private fun updateSideWalls(viewW: Float, viewH: Float) {
         log("updateSideWalls")
         val right = viewer.facing.turnedRight()
-        // Build the set of (k, depth) pairs that should have a SideWallActor this frame.
-        val desiredSideWalls = mutableSetOf<Pair<Int, Int>>()
+        // Build the set of (k, depth) pairs that should have a SideWallActor this frame,
+        // and a parallel map of map-space wall cell coordinates for the minimap overlay.
+        val newSideWalls = mutableSetOf<Pair<Int, Int>>()
+        val newSideWallCells = mutableMapOf<Pair<Int, Int>, String>()
 
         // k is latBoundaryTimes2: the boundary between leftLat=(k-1)/2 and rightLat=(k+1)/2
         // sits at frustum x = k/2. For fovWidth=4: k ∈ {-3,-1,+1,+3}, boundaries at ±0.5, ±1.5.
@@ -181,14 +198,29 @@ class DungeonRendererManager(
                 val rightIsWall = tileMapManager.tileMap.cellTypeAt(rightCellX, rightCellY) == CellType.WALL
                 // Only one side of the boundary is a wall → visible face.
                 if (leftIsWall != rightIsWall) {
+                    // Pre-compute the near/far screen x to skip zero-width trapezoids.
+                    // At depth=0, k=±1: xNear and xFar both equal ±viewW/2, so width=0 and
+                    // SideWallActor.draw() would return early — no point creating the actor.
+                    val xB = k / 2f
+                    val xNear = if (depth == 0) (if (xB > 0f) viewW / 2f else -viewW / 2f)
+                                else xB * viewW * viewDistance / (fovWidth * depth)
+                    val xFar = xB * viewW * viewDistance / (fovWidth * (depth + 1))
+                    if (xNear == xFar) continue
+
                     log("updateSideWalls", "add wall $k, $depth")
-                    desiredSideWalls.add(k to depth)
+                    newSideWalls.add(k to depth)
+                    // Record the wall cell's map coordinates so the minimap needs no conversion.
+                    val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
+                    newSideWallCells[wCellX to wCellY] = "$k,$depth"
                 }
             }
         }
 
+        // Publish map-space coordinates so the minimap can highlight cells without conversion.
+        _sideWallCells.value = newSideWallCells
+
         // Remove actors for boundaries that are no longer visible.
-        val keysToRemove = sideWallActors.keys.filter { it !in desiredSideWalls }
+        val keysToRemove = sideWallActors.keys.filter { it !in newSideWalls }
         keysToRemove.forEach { key -> sideWallActors.remove(key)?.let { actorManager.remove(it) } }
 
         // Create actors for newly visible boundaries.
@@ -197,7 +229,7 @@ class DungeonRendererManager(
         // At depth=0, xNear is clamped to the screen edge (±viewW/2) because the formula
         // xB * viewW * viewDistance / (fovWidth * depth) diverges as depth → 0.
         // layerIndex: same depth as a front wall but one step lower, so front walls paint on top.
-        desiredSideWalls.filter { it !in sideWallActors }.forEach { key ->
+        newSideWalls.filter { it !in sideWallActors }.forEach { key ->
             val (k, depth) = key
             val xB = k / 2f
             val xNear = if (depth == 0) {
@@ -219,6 +251,10 @@ class DungeonRendererManager(
                 viewDistance = viewDistance,
                 renderMode = { renderMode },
                 layerIndex = (viewDistance - depth) * 2,
+                debugLabel = textMeasurer?.measure(
+                    "$k,$depth",
+                    style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Cyan),
+                ),
             )
             sideWallActors[key] = actor
             actorManager.add(actor)

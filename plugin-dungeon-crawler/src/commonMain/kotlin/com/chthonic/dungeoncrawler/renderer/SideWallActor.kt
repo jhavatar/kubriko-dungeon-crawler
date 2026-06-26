@@ -1,9 +1,12 @@
 package com.chthonic.dungeoncrawler.renderer
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.drawText
 import com.pandulapeter.kubriko.actor.Actor
 import com.pandulapeter.kubriko.actor.body.BoxBody
 import com.pandulapeter.kubriko.actor.traits.Visible
@@ -27,6 +30,7 @@ class SideWallActor(
     private val viewDistance: Int,
     private val renderMode: () -> RenderMode,
     override val layerIndex: Int,
+    private val debugLabel: TextLayoutResult? = null,
 ) : Actor, Visible {
 
     private val xMin = minOf(xNear, xFar)
@@ -57,6 +61,15 @@ class SideWallActor(
                 drawPath(path, color = color)
                 drawPath(path, color = Color(0f, 0f, 0f, 0.4f), style = Stroke(2f))
             }
+        }
+        debugLabel?.let { layout ->
+            drawText(
+                layout,
+                topLeft = Offset(
+                    x = width / 2 - layout.size.width / 2,
+                    y = height / 2 - layout.size.height / 2,
+                ),
+            )
         }
     }
 

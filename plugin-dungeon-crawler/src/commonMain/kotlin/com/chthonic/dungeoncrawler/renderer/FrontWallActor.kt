@@ -1,8 +1,11 @@
 package com.chthonic.dungeoncrawler.renderer
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.drawText
 import com.pandulapeter.kubriko.actor.Actor
 import com.pandulapeter.kubriko.actor.body.BoxBody
 import com.pandulapeter.kubriko.actor.traits.Visible
@@ -18,6 +21,7 @@ class FrontWallActor(
     private val viewDistance: Int,
     private val renderMode: () -> RenderMode,
     override val layerIndex: Int,
+    private val debugLabel: TextLayoutResult? = null,
 ) : Actor, Visible {
 
     override val body = BoxBody(
@@ -33,6 +37,15 @@ class FrontWallActor(
                 drawRect(color = color, size = body.size.raw)
                 drawRect(color = Color(0f, 0f, 0f, 0.4f), size = body.size.raw, style = Stroke(2f))
             }
+        }
+        debugLabel?.let { layout ->
+            drawText(
+                layout,
+                topLeft = Offset(
+                    x = body.size.raw.width / 2 - layout.size.width / 2,
+                    y = body.size.raw.height / 2 - layout.size.height / 2,
+                ),
+            )
         }
     }
 
