@@ -94,14 +94,14 @@ fun DungeonCrawlerApp() {
                     .fillMaxSize()
                     .border(2.dp, Color(0xFF8B6B52)),
             )
-            // Overlay: draw the (col, depth) label at each front-wall slot centre.
+            // Overlay: draw the (lat, depth) label at each front-wall slot centre.
             Canvas(modifier = Modifier.fillMaxSize()) {
-                desiredWalls.forEach { (col, depth) ->
-                    val slotWidth = size.width * dungeonRenderer.viewDistance / (dungeonRenderer.fovWidth * depth)
-                    val centerX = size.width / 2f + col * slotWidth
+                desiredWalls.forEach { (lat, dep) ->
+                    val slotWidth = size.width * dungeonRenderer.viewDistance / (dungeonRenderer.fovWidth * dep)
+                    val centerX = size.width / 2f + lat * slotWidth
                     val centerY = size.height / 2f
                     val layout = textMeasurer.measure(
-                        text = "$col,$depth",
+                        text = "$lat,$dep",
                         style = TextStyle(fontSize = 12.sp, color = Color.Yellow),
                     )
                     drawText(layout, topLeft = Offset(centerX - layout.size.width / 2f, centerY - layout.size.height / 2f))

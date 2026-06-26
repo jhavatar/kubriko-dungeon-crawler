@@ -75,15 +75,15 @@ fun MinimapOverlay(
         drawPath(frustumPath, color = Color(0x26FFEE44))
         drawPath(frustumPath, color = Color(0xCCFFEE44), style = Stroke(width = 1f))
 
-        // Highlight each front-wall slot and label it with its (col, depth) frustum coordinates.
+        // Highlight each front-wall slot and label it with its (lat, depth) frustum coordinates.
         val labelStyle = TextStyle(fontSize = 6.sp, color = Color.Black)
-        desiredWalls.forEach { (col, depth) ->
-            val wCellX = cellX + depth * facing.dx + col * right.dx
-            val wCellY = cellY + depth * facing.dy + col * right.dy
+        desiredWalls.forEach { (lat, dep) ->
+            val wCellX = cellX + dep * facing.dx + lat * right.dx
+            val wCellY = cellY + dep * facing.dy + lat * right.dy
             val rx = originX + wCellX * cellSize + 1f
             val ry = originY + wCellY * cellSize + 1f
             drawRect(Color(0xCCFFEE00), topLeft = Offset(rx, ry), size = Size(cellSize - 2f, cellSize - 2f))
-            val layout = textMeasurer.measure("$col,$depth", style = labelStyle)
+            val layout = textMeasurer.measure("$lat,$dep", style = labelStyle)
             val lx = originX + (wCellX + 0.5f) * cellSize - layout.size.width / 2f
             val ly = originY + (wCellY + 0.5f) * cellSize - layout.size.height / 2f
             drawText(layout, topLeft = Offset(lx, ly))

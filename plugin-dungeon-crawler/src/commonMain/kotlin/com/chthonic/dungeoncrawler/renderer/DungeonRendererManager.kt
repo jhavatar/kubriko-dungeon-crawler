@@ -36,7 +36,7 @@ class DungeonRendererManager(
 
     private val fovHalf = fovWidth / 2f
 
-    // The set of (col, depth) frustum-slot coordinates that currently have a front wall actor.
+    // The set of (lat, depth) frustum-slot coordinates that currently have a front wall actor.
     // Exposed as Compose State so the minimap and viewport overlays recompose automatically.
     private val _desiredWalls = mutableStateOf<Set<Pair<Int, Int>>>(emptySet())
     val desiredWalls: State<Set<Pair<Int, Int>>> = _desiredWalls
@@ -63,58 +63,59 @@ class DungeonRendererManager(
         lastViewW = viewW
         lastViewH = viewH
         log("onUpdate")
-        updateSlots(viewW, viewH)
+        updateFrontWalls(viewW, viewH)
         updateSideWalls(viewW, viewH)
     }
 
     // Determines which front-facing wall rectangles are visible and keeps their WallSlotActors
     // in sync. Called every frame when the viewer position/facing or viewport size changes.
-    private fun updateSlots(viewW: Float, viewH: Float) {
-        log("updateSlots")
+    private fun updateFrontWalls(viewW: Float, viewH: Float) {
+        log("updateFrontWalls")
         val right = viewer.facing.turnedRight()
-        // Build the set of (col, depth) pairs that should have a WallSlotActor this frame.
+        // Build the set of (lat, depth) pairs that should have a WallSlotActor this frame.
         val newWalls = mutableSetOf<Pair<Int, Int>>()
 
-        // Each column is a vertical strip of the viewport centred on col * slotWidth.
-        for (col in -(fovWidth / 2)..(fovWidth / 2)) {
-            val colLeft = col - 0.5f
-            val colRight = col + 0.5f
-            // The widest frustum interval this column could ever expose, capped to ±fovHalf.
-            // Columns entirely outside the frustum (e.g. col=±3 with fovWidth=4) are skipped.
-            val maxExposable = maxOf(colLeft, -fovHalf) to minOf(colRight, fovHalf)
+        // Each lat is a lateral screen-space offset from centre: lat=0 is straight ahead, positive
+        // lats are to the viewer's right, negative to the left — independent of which map direction that is.
+        for (lat in -(fovWidth / 2)..(fovWidth / 2)) {
+            val latLeft = lat - 0.5f
+            val latRight = lat + 0.5f
+            // The widest frustum interval this lateral could ever expose, capped to ±fovHalf.
+            // Laterals entirely outside the frustum (e.g. lat=±3 with fovWidth=4) are skipped.
+            val maxExposable = maxOf(latLeft, -fovHalf) to minOf(latRight, fovHalf)
             if (maxExposable.first >= maxExposable.second) continue
 
             // Accumulates covered frustum intervals as walls are found near-to-far, so that
-            // cells hidden behind a closer wall in the same column are not rendered.
+            // cells hidden behind a closer wall at the same lateral are not rendered.
             val covered = mutableListOf<Pair<Float, Float>>()
 
-            // depth=0 is the party's own row: always skipped here. The party's cell (col=0) is
-            // OPEN by definition, and side cells (col≠0) at depth=0 are walls beside the party
+            // depth=0 is the party's own row: always skipped here. The party's cell (lat=0) is
+            // OPEN by definition, and side cells (lat≠0) at depth=0 are walls beside the party
             // that belong to side-wall rendering (updateSideWalls), not forward occlusion.
             // At depth≥1: geometric frustum — visible half-width = depth * fovHalf / viewDistance.
             for (depth in 1..viewDistance) {
-                // How wide the frustum is at this depth — outer columns only become visible
+                // How wide the frustum is at this depth — outer laterals only become visible
                 // once the frustum has opened far enough to reach them.
-                val visibleHalfCols = depth * fovHalf / viewDistance
-                val visLeft = maxOf(colLeft, -visibleHalfCols)
-                val visRight = minOf(colRight, visibleHalfCols)
-                if (visLeft >= visRight) continue  // column not yet inside the frustum at this depth
+                val visibleLatHalf = depth * fovHalf / viewDistance
+                val visLeft = maxOf(latLeft, -visibleLatHalf)
+                val visRight = minOf(latRight, visibleLatHalf)
+                if (visLeft >= visRight) continue  // lateral not yet inside the frustum at this depth
 
                 // Only check the cell if part of its frustum interval is not already behind a
                 // known wall.
                 val uncovered = subtractCoverage(visLeft to visRight, covered)
                 if (uncovered.isNotEmpty()) {
-                    val cellX = viewer.cellX + depth * viewer.facing.dx + col * right.dx
-                    val cellY = viewer.cellY + depth * viewer.facing.dy + col * right.dy
+                    val cellX = viewer.cellX + depth * viewer.facing.dx + lat * right.dx
+                    val cellY = viewer.cellY + depth * viewer.facing.dy + lat * right.dy
                     if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
-                        log("updateSlots", "add wal $cellX, $cellY")
-                        newWalls.add(col to depth)
+                        log("updateFrontWalls", "add wall $cellX, $cellY")
+                        newWalls.add(lat to depth)
                         // Mark this interval as covered so nothing behind it is rendered.
                         mergeInto(covered, visLeft to visRight)
                     }
                 }
 
-                // Early exit: if every part of this column that could ever be visible is already
+                // Early exit: if every part of this lateral that could ever be visible is already
                 // covered by closer walls, there is nothing more to find at greater depths.
                 if (subtractCoverage(maxExposable, covered).isEmpty()) break
             }
@@ -123,29 +124,29 @@ class DungeonRendererManager(
         // Publish the new set so Compose overlays recompose immediately.
         _desiredWalls.value = newWalls
 
-        // Remove actors for (col, depth) pairs that are no longer visible.
+        // Remove actors for (lat, depth) pairs that are no longer visible.
         val keysToRemove = wallActors.keys.filter { it !in newWalls }
         keysToRemove.forEach { key ->
             wallActors.remove(key)?.let { actorManager.remove(it) }
         }
 
-        // Create actors for newly visible (col, depth) pairs.
+        // Create actors for newly visible (lat, depth) pairs.
         // Slot dimensions follow the perspective projection: at depth D with fovWidth=viewDistance,
-        // each slot is viewW/fovWidth wide and viewH/D tall, centred at col * slotWidth.
+        // each slot is viewW/fovWidth wide and viewH/D tall, centred at lat * slotWidth.
         // layerIndex: closer walls use a higher index so they paint on top of farther ones;
         // the +1 keeps front walls above same-depth side walls from updateSideWalls.
         newWalls.filter { it !in wallActors }.forEach { key ->
-            val (col, depth) = key
-            val slotHeight = viewH / depth
-            val slotWidth = viewW * viewDistance / (fovWidth * depth)
+            val (lat, dep) = key
+            val slotHeight = viewH / dep
+            val slotWidth = viewW * viewDistance / (fovWidth * dep)
             val actor = WallSlotActor(
-                centerX = col * slotWidth,
+                centerX = lat * slotWidth,
                 width = slotWidth,
                 height = slotHeight,
-                depth = depth,
+                depth = dep,
                 viewDistance = viewDistance,
                 renderMode = { renderMode },
-                layerIndex = (viewDistance - depth) * 2 + 1,
+                layerIndex = (viewDistance - dep) * 2 + 1,
             )
             wallActors[key] = actor
             actorManager.add(actor)
@@ -154,28 +155,28 @@ class DungeonRendererManager(
 
     // Determines which side-wall trapezoids are visible and keeps their SideWallSlotActors
     // in sync. A side wall is the face running parallel to the viewing direction that appears
-    // whenever an open cell and a wall cell share a column boundary. Called every frame alongside
-    // updateSlots when the viewer position/facing or viewport size changes.
+    // whenever an open cell and a wall cell share a lateral boundary. Called every frame alongside
+    // updateFrontWalls when the viewer position/facing or viewport size changes.
     private fun updateSideWalls(viewW: Float, viewH: Float) {
         log("updateSideWalls")
         val right = viewer.facing.turnedRight()
         // Build the set of (k, depth) pairs that should have a SideWallSlotActor this frame.
         val desiredSideWalls = mutableSetOf<Pair<Int, Int>>()
 
-        // k is colBoundaryTimes2: the boundary between leftCol=(k-1)/2 and rightCol=(k+1)/2
+        // k is latBoundaryTimes2: the boundary between leftLat=(k-1)/2 and rightLat=(k+1)/2
         // sits at frustum x = k/2. For fovWidth=4: k ∈ {-3,-1,+1,+3}, boundaries at ±0.5, ±1.5.
         // A side wall exists at boundary k, depth D when one of the two flanking cells is a wall
         // and the other is open — that open/wall transition is the visible face.
         for (k in -(fovWidth - 1)..(fovWidth - 1) step 2) {
-            val leftCol = (k - 1) / 2
-            val rightCol = (k + 1) / 2
+            val leftLat = (k - 1) / 2
+            val rightLat = (k + 1) / 2
             // depth=0 covers the party's own row (walls immediately beside the party);
             // depth=viewDistance-1 is the last depth strip before the view limit.
             for (depth in 0 until viewDistance) {
-                val leftCellX = viewer.cellX + depth * viewer.facing.dx + leftCol * right.dx
-                val leftCellY = viewer.cellY + depth * viewer.facing.dy + leftCol * right.dy
-                val rightCellX = viewer.cellX + depth * viewer.facing.dx + rightCol * right.dx
-                val rightCellY = viewer.cellY + depth * viewer.facing.dy + rightCol * right.dy
+                val leftCellX = viewer.cellX + depth * viewer.facing.dx + leftLat * right.dx
+                val leftCellY = viewer.cellY + depth * viewer.facing.dy + leftLat * right.dy
+                val rightCellX = viewer.cellX + depth * viewer.facing.dx + rightLat * right.dx
+                val rightCellY = viewer.cellY + depth * viewer.facing.dy + rightLat * right.dy
                 val leftIsWall = tileMapManager.tileMap.cellTypeAt(leftCellX, leftCellY) == CellType.WALL
                 val rightIsWall = tileMapManager.tileMap.cellTypeAt(rightCellX, rightCellY) == CellType.WALL
                 // Only one side of the boundary is a wall → visible face.
