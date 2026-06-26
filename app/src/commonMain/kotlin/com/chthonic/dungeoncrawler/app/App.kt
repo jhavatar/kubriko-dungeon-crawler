@@ -36,28 +36,47 @@ fun DungeonCrawlerApp() {
         TileMapManager(
             initialTileMap = TileMap.fromString(
                 """
-                #####
-                #...#
-                #.#.#
-                #...#
-                #####
+                ########
+                #...#.##
+                #.#.#.##
+                #......#
+                ######.#
+                ####...#
+                #......#
+                ########
                 """
             )
         )
     }
 
-    var viewerSnapshot by remember { mutableStateOf(ViewerSnapshot(viewer.cellX, viewer.cellY, viewer.facing)) }
+    var viewerSnapshot by remember {
+        mutableStateOf(
+            ViewerSnapshot(
+                viewer.cellX,
+                viewer.cellY,
+                viewer.facing
+            )
+        )
+    }
 
     val playerManager = remember {
         PlayerManager(
             viewer = viewer,
             tileMapManager = tileMapManager,
-            onViewerChanged = { viewerSnapshot = ViewerSnapshot(viewer.cellX, viewer.cellY, viewer.facing) },
+            onViewerChanged = {
+                viewerSnapshot = ViewerSnapshot(viewer.cellX, viewer.cellY, viewer.facing)
+            },
             isLoggingEnabled = true,
         )
     }
     val textMeasurer = rememberTextMeasurer()
-    val dungeonRenderer = remember { DungeonRendererManager(viewer = viewer, textMeasurer = textMeasurer, isLoggingEnabled = true) }
+    val dungeonRenderer = remember {
+        DungeonRendererManager(
+            viewer = viewer,
+            textMeasurer = textMeasurer,
+            isLoggingEnabled = true
+        )
+    }
     val kubriko = remember {
         Kubriko.newInstance(
             tileMapManager,

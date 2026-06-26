@@ -184,7 +184,8 @@ class DungeonRendererManager(
         // sits at frustum x = k/2. For fovWidth=4: k ∈ {-3,-1,+1,+3}, boundaries at ±0.5, ±1.5.
         // A side wall exists at boundary k, depth D when one of the two flanking cells is a wall
         // and the other is open — that open/wall transition is the visible face.
-        for (k in -(fovWidth - 1)..(fovWidth - 1) step 2) {
+        val latMax = fovWidth / 2
+        for (k in -(2 * latMax - 1)..(2 * latMax - 1) step 2) {
             val leftLat = (k - 1) / 2
             val rightLat = (k + 1) / 2
             // depth=0 covers the party's own row (walls immediately beside the party);
@@ -206,6 +207,9 @@ class DungeonRendererManager(
                                 else xB * viewW * viewDistance / (fovWidth * depth)
                     val xFar = xB * viewW * viewDistance / (fovWidth * (depth + 1))
                     if (xNear == xFar) continue
+                    // Skip strips whose far edge (the one closer to screen centre) is already outside
+                    // the frustum — the entire strip is off-screen.
+                    if (xFar > viewW / 2f || xFar < -viewW / 2f) continue
 
                     log("updateSideWalls", "add wall $k, $depth")
                     newSideWalls.add(k to depth)
@@ -242,10 +246,15 @@ class DungeonRendererManager(
             val xFar = xB * viewW * viewDistance / (fovWidth * (depth + 1))
             val yNearHalf = if (depth == 0) viewH / 2f else viewH / (2f * depth)
             val yFarHalf = viewH / (2f * (depth + 1))
+            // If the near edge overshoots the frustum boundary, clamp it and interpolate the height
+            // at the clip point so the trapezoid meets the screen edge at the right size.
+            val clampedXNear = xNear.coerceIn(-viewW / 2f, viewW / 2f)
+            val clampedYNearHalf = if (clampedXNear == xNear || xFar == xNear) yNearHalf
+                else yNearHalf + (clampedXNear - xNear) / (xFar - xNear) * (yFarHalf - yNearHalf)
             val actor = SideWallActor(
-                xNear = xNear,
+                xNear = clampedXNear,
                 xFar = xFar,
-                yNearHalf = yNearHalf,
+                yNearHalf = clampedYNearHalf,
                 yFarHalf = yFarHalf,
                 depth = depth,
                 viewDistance = viewDistance,
