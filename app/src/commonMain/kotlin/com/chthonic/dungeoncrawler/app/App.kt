@@ -1,8 +1,20 @@
 package com.chthonic.dungeoncrawler.app
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import com.chthonic.dungeoncrawler.renderer.DungeonRendererManager
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.Mob
@@ -12,6 +24,9 @@ import com.pandulapeter.kubriko.Kubriko
 import com.pandulapeter.kubriko.KubrikoViewport
 import com.pandulapeter.kubriko.keyboardInput.KeyboardInputManager
 import com.pandulapeter.kubriko.logger.Logger
+import com.pandulapeter.kubriko.manager.ViewportManager
+
+private data class ViewerSnapshot(val cellX: Int, val cellY: Int, val facing: Facing)
 
 @Composable
 fun DungeonCrawlerApp() {
@@ -29,12 +44,25 @@ fun DungeonCrawlerApp() {
             )
         )
     }
+
+    var viewerSnapshot by remember { mutableStateOf(ViewerSnapshot(viewer.cellX, viewer.cellY, viewer.facing)) }
+
+    val playerManager = remember {
+        PlayerManager(
+            viewer = viewer,
+            tileMapManager = tileMapManager,
+            onViewerChanged = { viewerSnapshot = ViewerSnapshot(viewer.cellX, viewer.cellY, viewer.facing) },
+            isLoggingEnabled = true,
+        )
+    }
+    val dungeonRenderer = remember { DungeonRendererManager(viewer = viewer, isLoggingEnabled = true) }
     val kubriko = remember {
         Kubriko.newInstance(
             tileMapManager,
-            DungeonRendererManager(viewer = viewer),
-            PlayerManager(viewer = viewer, tileMapManager = tileMapManager, isLoggingEnabled = true),
+            dungeonRenderer,
+            playerManager,
             KeyboardInputManager.newInstance(),
+            ViewportManager.newInstance(),
             instanceNameForLogging = "DungeonCrawlerPoc",
         )
     }
@@ -44,5 +72,25 @@ fun DungeonCrawlerApp() {
         }
     }
 
-    KubrikoViewport(kubriko = kubriko)
+    Box(modifier = Modifier.fillMaxSize()) {
+        KubrikoViewport(
+            kubriko = kubriko,
+            modifier = Modifier
+                .fillMaxSize(0.75f)
+                .align(Alignment.Center)
+                .border(2.dp, Color(0xFF8B6B52)),
+        )
+        MinimapOverlay(
+            tileMap = tileMapManager.tileMap,
+            cellX = viewerSnapshot.cellX,
+            cellY = viewerSnapshot.cellY,
+            facing = viewerSnapshot.facing,
+            fovWidth = dungeonRenderer.fovWidth,
+            viewDistance = dungeonRenderer.viewDistance,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(8.dp)
+                .size(150.dp),
+        )
+    }
 }

@@ -36,6 +36,7 @@ kotlin {
             implementation(libs.kubriko.keyboard.input)
             implementation(project(":plugin-tilemap"))
             implementation(project(":plugin-dungeon-crawler"))
+            implementation(compose.foundation)
         }
         val androidMain by getting
         androidMain.dependencies {

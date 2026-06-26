@@ -11,6 +11,7 @@ import com.pandulapeter.kubriko.manager.Manager
 class PlayerManager(
     private val viewer: GridPosition,
     private val tileMapManager: TileMapManager,
+    private val onViewerChanged: () -> Unit = {},
     isLoggingEnabled: Boolean = false,
     instanceNameForLogging: String? = null,
 ) : Manager(
@@ -27,12 +28,12 @@ class PlayerManager(
 
     override fun onKeyPressed(key: Key) {
         when (key) {
-            Key.W -> if (tileMapManager.moveForward(viewer)) logPosition("moveForward")
-            Key.S -> if (tileMapManager.moveBackward(viewer)) logPosition("moveBackward")
-            Key.A -> if (tileMapManager.strafeLeft(viewer)) logPosition("strafeLeft")
-            Key.D -> if (tileMapManager.strafeRight(viewer)) logPosition("strafeRight")
-            Key.Q -> { viewer.facing = viewer.facing.turnedLeft(); logFacing("turnLeft") }
-            Key.E -> { viewer.facing = viewer.facing.turnedRight(); logFacing("turnRight") }
+            Key.W -> if (tileMapManager.moveForward(viewer)) { logPosition("moveForward"); onViewerChanged() }
+            Key.S -> if (tileMapManager.moveBackward(viewer)) { logPosition("moveBackward"); onViewerChanged() }
+            Key.A -> if (tileMapManager.strafeLeft(viewer)) { logPosition("strafeLeft"); onViewerChanged() }
+            Key.D -> if (tileMapManager.strafeRight(viewer)) { logPosition("strafeRight"); onViewerChanged() }
+            Key.Q -> { viewer.facing = viewer.facing.turnedLeft(); logFacing("turnLeft"); onViewerChanged() }
+            Key.E -> { viewer.facing = viewer.facing.turnedRight(); logFacing("turnRight"); onViewerChanged() }
         }
     }
 

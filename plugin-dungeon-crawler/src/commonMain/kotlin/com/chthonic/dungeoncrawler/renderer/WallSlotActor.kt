@@ -29,7 +29,10 @@ class WallSlotActor(
         val color = computeColor()
         when (renderMode()) {
             RenderMode.WIREFRAME -> drawRect(color = color, size = body.size.raw, style = Stroke(4f))
-            RenderMode.TEXTURED -> drawRect(color = color, size = body.size.raw)
+            RenderMode.TEXTURED -> {
+                drawRect(color = color, size = body.size.raw)
+                drawRect(color = Color(0f, 0f, 0f, 0.4f), size = body.size.raw, style = Stroke(2f))
+            }
         }
     }
 
