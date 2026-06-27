@@ -14,10 +14,20 @@ import com.pandulapeter.kubriko.manager.Manager
 import com.pandulapeter.kubriko.manager.ViewportManager
 
 class DungeonRendererManager(
+    // The entity whose position and facing drive the first-person view.
     private val viewer: GridPosition,
+    // Number of lateral cell slots across the frustum at viewDistance. Odd values give a
+    // centre slot; even values split symmetrically. Controls how wide the corridor view is.
     val fovWidth: Int = 5,
+    // How many cells forward the frustum extends. Walls beyond this distance are not rendered.
     val viewDistance: Int = 4,
+    // Fraction of the viewport height that a wall at depth=1 occupies (0 < scale ≤ 1).
+    // Values below 1 leave floor and ceiling strips visible; 1.0 fills the full viewport.
+    val wallHeightScale: Float = 0.8f,
+    // Switches between solid-colour textured rendering and wireframe outline rendering.
     var renderMode: RenderMode = RenderMode.TEXTURED,
+    // When non-null, enables debug labels drawn on each wall actor showing its (lat,depth) or
+    // (k,depth) slot coordinates.
     private val textMeasurer: TextMeasurer? = null,
     isLoggingEnabled: Boolean = false,
     instanceNameForLogging: String? = null,
@@ -130,7 +140,7 @@ class DungeonRendererManager(
         // the +1 keeps front walls above same-depth side walls from updateSideWalls.
         newWalls.filter { it !in wallActors }.forEach { key ->
             val (lat, dep) = key
-            val slotHeight = viewH / dep
+            val slotHeight = viewH * wallHeightScale / dep
             val slotWidth = viewW * viewDistance / (fovWidth * dep)
             val actor = FrontWallActor(
                 centerX = lat * slotWidth,
@@ -236,8 +246,13 @@ class DungeonRendererManager(
             }
             // Far edge is always one depth step further using the standard perspective formula.
             val xFar = xB * viewW * viewDistance / (fovWidth * (depth + 1))
-            val yNearHalf = if (depth == 0) viewH / 2f else viewH / (2f * depth)
-            val yFarHalf = viewH / (2f * (depth + 1))
+            val yFarHalf = viewH * wallHeightScale / (2f * (depth + 1))
+            // At depth=0 the x formula diverges, so xNear is clamped to ±viewW/2. Derive yNearHalf
+            // from the same perspective line as depth≥1 strips: y/|x| is constant, so
+            // yNearHalf = (viewW/2) × yFarHalf / |xFar|. Using viewH/2 here breaks that line
+            // and causes a visible bulge whenever wallHeightScale ≠ 2×|xB|×viewDistance/fovWidth.
+            val yNearHalf = if (depth == 0) (viewW / 2f) * yFarHalf / kotlin.math.abs(xFar)
+                            else viewH * wallHeightScale / (2f * depth)
             // If the near edge overshoots the frustum boundary, clamp it and interpolate the height
             // at the clip point so the trapezoid meets the screen edge at the right size.
             val clampedXNear = xNear.coerceIn(-viewW / 2f, viewW / 2f)
