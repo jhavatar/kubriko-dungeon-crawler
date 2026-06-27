@@ -89,22 +89,70 @@ class DungeonRendererManager(
     // Determines the complete set of visible front-face and side-face wall slots this frame,
     // then delegates actor lifecycle management to syncFrontWallActors / syncSideWallActors.
     //
-    // Core invariant — angle = lateral / depth:
-    //   A sight ray that reaches lateral position x at depth D has angle x/D. This ratio is
-    //   constant along the entire ray, so it serves as a coordinate-system-independent label
-    //   for a ray direction. The frustum spans angles ±fovHalf/viewDistance.
+    // -----------------------------------------------------------------------------------------
+    // Core invariant — angle = lateral / depth
+    // -----------------------------------------------------------------------------------------
+    // "Angle" here is the slope of a sight ray in the top-down plan view, not a trigonometric
+    // angle. The party is at the origin; depth increases forward; lateral increases rightward.
+    // Any straight ray from the origin has a constant slope = lateral/depth at every point:
     //
-    // Angular occlusion buffer (equivalent to DOOM's solidsegs):
-    //   `covered` is a sorted, non-overlapping list of angular intervals blocked by solid walls
-    //   found so far. Once an interval is in `covered`, no feature behind it in that angular
-    //   range will be rendered. subtractCoverage / mergeInto maintain this list.
+    //   depth                                        depth
+    //     ↑                                            ↑
+    //   4 ·  ·  ·  ·  X   lat=2,depth=4 → 2/4=0.5  4 ├──────────────┤  lat ±fovHalf
+    //     |           ╱                               3 │╲            ╱│  (frustum at
+    //   3 ·  ·  ·  X    lat=1.5,depth=3 → 1.5/3=0.5   │ ╲          ╱ │  viewDistance)
+    //     |         ╱                               2   │  ╲        ╱  │
+    //   2 ·  ·  X    lat=1,depth=2 → 1/2=0.5       1   │   ╲      ╱   │
+    //     |       ╱                                 0   │    ╲    ╱    │
+    //   1 ·  X    lat=0.5,depth=1 → 0.5/1=0.5              *          party
+    //     |   ╱                                        ←  fovHalf  →
+    //   0 ·  *──────────────→ lateral              frustumAngleHalf = fovHalf/viewDistance
+    //        0   1   2
     //
-    // Why the grid makes BSP unnecessary:
-    //   All geometry is axis-aligned on a regular grid and the viewer faces a cardinal direction,
-    //   so every cell at depth D is strictly further than every cell at depth D-1. The depth loop
-    //   IS the front-to-back ordering — no spatial tree is needed.
+    // The frustum spans angles ±frustumAngleHalf. Every feature is expressed as an interval
+    // on this axis; the covered list tracks which sub-intervals are already blocked.
     //
-    // Per-depth ordering (critical for correctness):
+    // Front wall at (lat, D) — cell spans lateral [lat-0.5, lat+0.5] at depth D:
+    //
+    //   depth           left ray  right ray
+    //     ↑                  ╲    ╱
+    //   2 ·  · [══wall══] ·  ·   cell lat=1: lateral 0.5..1.5 at depth 2
+    //     |              ╲  ╱        left  angle = 0.5/2 = 0.25
+    //   1 ·  ·  ·  ·  ·  ╲╱         right angle = 1.5/2 = 0.75
+    //     |                *         angular interval: [0.25, 0.75]
+    //     0   0.5   1   1.5 → lateral
+    //
+    // Side wall at boundary xB, strip sideDepth→D — face runs along fixed lateral xB:
+    //
+    //   depth
+    //     ↑
+    //   2 ·  F  ·  far end at (xB=0.5, depth=2): angle = 0.5/2 = 0.25
+    //     |  |╲
+    //   1 ·  N  ╲  near end at (xB=0.5, depth=1): angle = 0.5/1 = 0.5
+    //     |  face ╲                angular interval: [0.25, 0.5]
+    //   0 ·  *─────╲──→ lateral   (all rays that could reach any point on the face)
+    //        0  0.5  1
+    //
+    // Because both feature types map to the same angular number line, a single covered entry
+    // from a close wall blocks both front faces and side faces behind it with no special cases.
+    //
+    // -----------------------------------------------------------------------------------------
+    // Angular occlusion buffer (equivalent to DOOM's solidsegs)
+    // -----------------------------------------------------------------------------------------
+    // `covered` is a sorted, non-overlapping list of angular intervals blocked by solid walls
+    // found so far. subtractCoverage queries it; mergeInto extends it.
+    //
+    // -----------------------------------------------------------------------------------------
+    // Why the grid makes BSP unnecessary
+    // -----------------------------------------------------------------------------------------
+    // All geometry is axis-aligned and the viewer faces a cardinal direction, so every cell at
+    // depth D is strictly further than every cell at depth D-1. The depth loop IS the front-to-
+    // back ordering — no spatial tree is needed (contrast with DOOM, which uses a BSP tree to
+    // guarantee front-to-back ordering for arbitrary wall angles).
+    //
+    // -----------------------------------------------------------------------------------------
+    // Per-depth ordering (critical for correctness)
+    // -----------------------------------------------------------------------------------------
     //   Step 1 — Lateral boundary test (side walls at strip D-1→D):
     //     Checked BEFORE adding D's coverage so a wall doesn't occlude its own adjacent side face.
     //     E.g. the right face of a dead-end wall at depth=1 must pass the coverage check at a
@@ -114,8 +162,22 @@ class DungeonRendererManager(
     //     directly in front of it (depth D-1, same lat) is open — walls with no exposed face
     //     are skipped, but they still contribute to coverage in step 3.
     //   Step 3 — Coverage update:
-    //     Every solid wall cell at depth D, whether its front face was rendered or not, registers
-    //     its angular interval in `covered`. This shadows all features at depth > D.
+    //     Every solid wall cell at depth D, rendered or not, registers its angular interval in
+    //     `covered`. Must happen after steps 1 and 2 for the ordering reason above.
+    //
+    // -----------------------------------------------------------------------------------------
+    // Complexity — O(D × W²)
+    // -----------------------------------------------------------------------------------------
+    //   D = viewDistance, W = fovWidth, n = size of `covered` (at most ⌈W/2⌉ intervals,
+    //   since W slots can produce at most W/2 non-adjacent covered bands → n = O(W)).
+    //
+    //   Per depth level:
+    //     Step 1: W boundaries × subtractCoverage O(n)  →  O(W·n)
+    //     Step 2: W lats      × subtractCoverage O(n)  →  O(W·n)
+    //     Step 3: W lats      × mergeInto        O(n)  →  O(W·n)
+    //
+    //   Total: O(D × W × n) = O(D × W²).
+    //   For typical blobber values (D=4, W=5): ≈100 iterations per frame — effectively O(1).
     private fun updateWalls(viewW: Float, viewH: Float) {
         log("updateWalls")
         val right = viewer.facing.turnedRight()
