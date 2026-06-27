@@ -15,7 +15,7 @@ import com.pandulapeter.kubriko.manager.ViewportManager
 
 class DungeonRendererManager(
     private val viewer: GridPosition,
-    val fovWidth: Int = 4,
+    val fovWidth: Int = 5,
     val viewDistance: Int = 4,
     var renderMode: RenderMode = RenderMode.TEXTURED,
     private val textMeasurer: TextMeasurer? = null,
@@ -118,7 +118,7 @@ class DungeonRendererManager(
                     val cellX = viewer.cellX + depth * viewer.facing.dx + lat * right.dx
                     val cellY = viewer.cellY + depth * viewer.facing.dy + lat * right.dy
                     if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
-                        log("updateFrontWalls", "add wall $cellX, $cellY")
+                        log("updateFrontWalls", "add wall $lat, $depth")
                         newWalls.add(lat to depth)
                         newFrontWallCells[cellX to cellY] = "$lat,$depth"
                         // Mark this interval as covered so nothing behind it is rendered.
@@ -211,7 +211,8 @@ class DungeonRendererManager(
                     // the frustum — the entire strip is off-screen.
                     if (xFar > viewW / 2f || xFar < -viewW / 2f) continue
 
-                    log("updateSideWalls", "add wall $k, $depth")
+                    val wallLat = if (leftIsWall) leftLat else rightLat
+                    log("updateSideWalls", "add wall $wallLat, $depth")
                     newSideWalls.add(k to depth)
                     // Record the wall cell's map coordinates so the minimap needs no conversion.
                     val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
