@@ -181,6 +181,16 @@ class DungeonRendererManager(
                 val rightIsWall = tileMapManager.tileMap.cellTypeAt(rightCellX, rightCellY) == CellType.WALL
                 // Only one side of the boundary is a wall → visible face.
                 if (leftIsWall != rightIsWall) {
+                    // Skip if the wall cell's inward neighbour (lat - sign(lat), same depth) is also
+                    // a wall — the face is interior to a wall block, hidden from the party.
+                    val wallLat = if (leftIsWall) leftLat else rightLat
+                    if (wallLat != 0) {
+                        val inwardLat = wallLat - if (wallLat > 0) 1 else -1
+                        val inwardCellX = viewer.cellX + depth * viewer.facing.dx + inwardLat * right.dx
+                        val inwardCellY = viewer.cellY + depth * viewer.facing.dy + inwardLat * right.dy
+                        if (tileMapManager.tileMap.cellTypeAt(inwardCellX, inwardCellY) == CellType.WALL) continue
+                    }
+
                     // Pre-compute the near/far screen x to skip zero-width trapezoids.
                     // At depth=0, k=±1: xNear and xFar both equal ±viewW/2, so width=0 and
                     // SideWallActor.draw() would return early — no point creating the actor.
@@ -193,8 +203,7 @@ class DungeonRendererManager(
                     // the frustum — the entire strip is off-screen.
                     if (xFar > viewW / 2f || xFar < -viewW / 2f) continue
 
-                    val wallLat = if (leftIsWall) leftLat else rightLat
-                    log("updateSideWalls", "add wall $wallLat, $depth")
+                    log("updateSideWalls", "add wall lat=$wallLat, depth=$depth")
                     newSideWalls.add(k to depth)
                     // Record the wall cell's map coordinates so the minimap needs no conversion.
                     val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
