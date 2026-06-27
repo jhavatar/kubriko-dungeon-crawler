@@ -90,45 +90,27 @@ class DungeonRendererManager(
         for (lat in -(fovWidth / 2)..(fovWidth / 2)) {
             val latLeft = lat - 0.5f
             val latRight = lat + 0.5f
-            // The widest frustum interval this lateral could ever expose, capped to ±fovHalf.
-            // Laterals entirely outside the frustum (e.g. lat=±3 with fovWidth=4) are skipped.
-            val maxExposable = maxOf(latLeft, -fovHalf) to minOf(latRight, fovHalf)
-            if (maxExposable.first >= maxExposable.second) continue
+            // Skip laterals entirely outside the frustum (e.g. lat=±3 with fovWidth=4).
+            if (maxOf(latLeft, -fovHalf) >= minOf(latRight, fovHalf)) continue
 
-            // Accumulates covered frustum intervals as walls are found near-to-far, so that
-            // cells hidden behind a closer wall at the same lateral are not rendered.
-            val covered = mutableListOf<Pair<Float, Float>>()
-
-            // depth=0 is the party's own row: always skipped here. The party's cell (lat=0) is
-            // OPEN by definition, and side cells (lat≠0) at depth=0 are walls beside the party
-            // that belong to side-wall rendering (updateSideWalls), not forward occlusion.
-            // At depth≥1: geometric frustum — visible half-width = depth * fovHalf / viewDistance.
+            // Scan depths near-to-far. A front face is only visible at an open→wall transition:
+            // the cell is a wall and the cell directly in front of it (depth-1) is open.
+            // Walls preceded by another wall have no exposed face and are skipped.
             for (depth in 1..viewDistance) {
-                // How wide the frustum is at this depth — outer laterals only become visible
-                // once the frustum has opened far enough to reach them.
                 val visibleLatHalf = depth * fovHalf / viewDistance
-                val visLeft = maxOf(latLeft, -visibleLatHalf)
-                val visRight = minOf(latRight, visibleLatHalf)
-                if (visLeft >= visRight) continue  // lateral not yet inside the frustum at this depth
+                if (maxOf(latLeft, -visibleLatHalf) >= minOf(latRight, visibleLatHalf)) continue
 
-                // Only check the cell if part of its frustum interval is not already behind a
-                // known wall.
-                val uncovered = subtractCoverage(visLeft to visRight, covered)
-                if (uncovered.isNotEmpty()) {
-                    val cellX = viewer.cellX + depth * viewer.facing.dx + lat * right.dx
-                    val cellY = viewer.cellY + depth * viewer.facing.dy + lat * right.dy
-                    if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
-                        log("updateFrontWalls", "add wall $lat, $depth")
-                        newWalls.add(lat to depth)
-                        newFrontWallCells[cellX to cellY] = "$lat,$depth"
-                        // Mark this interval as covered so nothing behind it is rendered.
-                        mergeInto(covered, visLeft to visRight)
-                    }
-                }
+                val cellX = viewer.cellX + depth * viewer.facing.dx + lat * right.dx
+                val cellY = viewer.cellY + depth * viewer.facing.dy + lat * right.dy
+                if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) != CellType.WALL) continue
 
-                // Early exit: if every part of this lateral that could ever be visible is already
-                // covered by closer walls, there is nothing more to find at greater depths.
-                if (subtractCoverage(maxExposable, covered).isEmpty()) break
+                val prevCellX = viewer.cellX + (depth - 1) * viewer.facing.dx + lat * right.dx
+                val prevCellY = viewer.cellY + (depth - 1) * viewer.facing.dy + lat * right.dy
+                if (tileMapManager.tileMap.cellTypeAt(prevCellX, prevCellY) == CellType.WALL) continue
+
+                log("updateFrontWalls", "add wall $lat, $depth")
+                newWalls.add(lat to depth)
+                newFrontWallCells[cellX to cellY] = "$lat,$depth"
             }
         }
 
@@ -271,39 +253,4 @@ class DungeonRendererManager(
         }
     }
 
-    // Returns the portions of [interval] not covered by any interval in [covered]
-    private fun subtractCoverage(
-        interval: Pair<Float, Float>,
-        covered: List<Pair<Float, Float>>,
-    ): List<Pair<Float, Float>> {
-        var remaining = listOf(interval)
-        for ((coverLeft, coverRight) in covered) {
-            remaining = remaining.flatMap { (left, right) ->
-                buildList {
-                    if (left < coverLeft) add(left to minOf(right, coverLeft))
-                    if (right > coverRight) add(maxOf(left, coverRight) to right)
-                }.filter { (l, r) -> l < r }
-            }
-        }
-        return remaining
-    }
-
-    // Adds [interval] to [covered] and merges any overlapping or touching intervals
-    private fun mergeInto(
-        covered: MutableList<Pair<Float, Float>>,
-        interval: Pair<Float, Float>,
-    ) {
-        covered.add(interval)
-        covered.sortBy { it.first }
-        val merged = mutableListOf<Pair<Float, Float>>()
-        for (it in covered) {
-            if (merged.isEmpty() || merged.last().second < it.first) {
-                merged.add(it)
-            } else {
-                merged[merged.size - 1] = merged.last().first to maxOf(merged.last().second, it.second)
-            }
-        }
-        covered.clear()
-        covered.addAll(merged)
-    }
 }
