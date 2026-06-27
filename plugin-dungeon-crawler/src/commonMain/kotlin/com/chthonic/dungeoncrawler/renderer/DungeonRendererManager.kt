@@ -81,71 +81,210 @@ class DungeonRendererManager(
         lastViewW = viewW
         lastViewH = viewH
         log("onUpdate")
-        updateFrontWalls(viewW, viewH)
-        updateSideWalls(viewW, viewH)
+        updateWalls(viewW, viewH)
     }
 
-    // Determines which front-facing wall rectangles are visible and keeps their FrontWallActors
-    // in sync. Called every frame when the viewer position/facing or viewport size changes.
-    private fun updateFrontWalls(viewW: Float, viewH: Float) {
-        log("updateFrontWalls")
+    // Front-to-back angular occlusion traversal.
+    //
+    // Determines the complete set of visible front-face and side-face wall slots this frame,
+    // then delegates actor lifecycle management to syncFrontWallActors / syncSideWallActors.
+    //
+    // Core invariant — angle = lateral / depth:
+    //   A sight ray that reaches lateral position x at depth D has angle x/D. This ratio is
+    //   constant along the entire ray, so it serves as a coordinate-system-independent label
+    //   for a ray direction. The frustum spans angles ±fovHalf/viewDistance.
+    //
+    // Angular occlusion buffer (equivalent to DOOM's solidsegs):
+    //   `covered` is a sorted, non-overlapping list of angular intervals blocked by solid walls
+    //   found so far. Once an interval is in `covered`, no feature behind it in that angular
+    //   range will be rendered. subtractCoverage / mergeInto maintain this list.
+    //
+    // Why the grid makes BSP unnecessary:
+    //   All geometry is axis-aligned on a regular grid and the viewer faces a cardinal direction,
+    //   so every cell at depth D is strictly further than every cell at depth D-1. The depth loop
+    //   IS the front-to-back ordering — no spatial tree is needed.
+    //
+    // Per-depth ordering (critical for correctness):
+    //   Step 1 — Lateral boundary test (side walls at strip D-1→D):
+    //     Checked BEFORE adding D's coverage so a wall doesn't occlude its own adjacent side face.
+    //     E.g. the right face of a dead-end wall at depth=1 must pass the coverage check at a
+    //     moment when the dead-end wall itself has not yet contributed to `covered`.
+    //   Step 2 — Open→wall transition test (front walls at depth D):
+    //     Checked against coverage from depths < D. A front face is only emitted when the cell
+    //     directly in front of it (depth D-1, same lat) is open — walls with no exposed face
+    //     are skipped, but they still contribute to coverage in step 3.
+    //   Step 3 — Coverage update:
+    //     Every solid wall cell at depth D, whether its front face was rendered or not, registers
+    //     its angular interval in `covered`. This shadows all features at depth > D.
+    private fun updateWalls(viewW: Float, viewH: Float) {
+        log("updateWalls")
         val right = viewer.facing.turnedRight()
-        // Build the set of (lat, depth) pairs that should have a FrontWallActor this frame,
-        // and a parallel map of map-space cell coordinates for the minimap overlay.
+        val latMax = fovWidth / 2
         val newWalls = mutableSetOf<Pair<Int, Int>>()
         val newFrontWallCells = mutableMapOf<Pair<Int, Int>, String>()
+        val newSideWalls = mutableSetOf<Pair<Int, Int>>()
+        val newSideWallCells = mutableMapOf<Pair<Int, Int>, String>()
 
-        // Each lat is a lateral screen-space offset from centre: lat=0 is straight ahead, positive
-        // lats are to the viewer's right, negative to the left — independent of which map direction that is.
-        for (lat in -(fovWidth / 2)..(fovWidth / 2)) {
-            val latLeft = lat - 0.5f
-            val latRight = lat + 0.5f
-            // Skip laterals entirely outside the frustum (e.g. lat=±3 with fovWidth=4).
-            if (maxOf(latLeft, -fovHalf) >= minOf(latRight, fovHalf)) continue
+        // frustumAngleHalf is the maximum visible angle: a ray to the far corner of the outermost
+        // slot (lat = ±fovHalf at depth = viewDistance) has angle ±fovHalf/viewDistance.
+        val frustumAngleHalf = fovHalf / viewDistance
+        val covered = mutableListOf<Pair<Float, Float>>()
 
-            // Scan depths near-to-far. A front face is only visible at an open→wall transition:
-            // the cell is a wall and the cell directly in front of it (depth-1) is open.
-            // Walls preceded by another wall have no exposed face and are skipped.
-            for (depth in 1..viewDistance) {
-                val visibleLatHalf = depth * fovHalf / viewDistance
+        for (D in 1..viewDistance) {
+            val sideDepth = D - 1  // near depth of this strip; far depth is D
+
+            // ---------------------------------------------------------------------------------
+            // Step 1 — Lateral boundary test: side walls at depth strip sideDepth → D
+            //
+            // A side wall exists at boundary k when exactly one of the two flanking cells is a
+            // wall. k = latBoundaryTimes2: the seam between leftLat=(k-1)/2 and rightLat=(k+1)/2
+            // sits at frustum lateral position xB = k/2. For fovWidth=4 the boundaries are
+            // k ∈ {-3,-1,+1,+3}, i.e. xB = ±0.5, ±1.5.
+            // ---------------------------------------------------------------------------------
+            for (k in -(2 * latMax - 1)..(2 * latMax - 1) step 2) {
+                val leftLat = (k - 1) / 2
+                val rightLat = (k + 1) / 2
+                val xB = k / 2f
+
+                val leftCellX = viewer.cellX + sideDepth * viewer.facing.dx + leftLat * right.dx
+                val leftCellY = viewer.cellY + sideDepth * viewer.facing.dy + leftLat * right.dy
+                val rightCellX = viewer.cellX + sideDepth * viewer.facing.dx + rightLat * right.dx
+                val rightCellY = viewer.cellY + sideDepth * viewer.facing.dy + rightLat * right.dy
+                val leftIsWall = tileMapManager.tileMap.cellTypeAt(leftCellX, leftCellY) == CellType.WALL
+                val rightIsWall = tileMapManager.tileMap.cellTypeAt(rightCellX, rightCellY) == CellType.WALL
+                // Both cells same type → interior seam (wall/wall) or open gap (open/open): no face.
+                if (leftIsWall == rightIsWall) continue
+
+                // Inward-neighbour occlusion: if the wall cell's neighbour one step closer to
+                // lat=0 (same depth) is also a wall, this face is interior to a wall block and
+                // cannot be seen from the party. lat - sign(lat) steps one slot toward centre.
+                val wallLat = if (leftIsWall) leftLat else rightLat
+                if (wallLat != 0) {
+                    val inwardLat = wallLat - if (wallLat > 0) 1 else -1
+                    val inwardCellX = viewer.cellX + sideDepth * viewer.facing.dx + inwardLat * right.dx
+                    val inwardCellY = viewer.cellY + sideDepth * viewer.facing.dy + inwardLat * right.dy
+                    if (tileMapManager.tileMap.cellTypeAt(inwardCellX, inwardCellY) == CellType.WALL) continue
+                }
+
+                // Geometry pre-check: skip zero-width trapezoids and strips entirely off-screen.
+                // xNear is the screen-x of the near edge (party side); xFar is the far edge.
+                // At sideDepth=0 the formula diverges (division by zero), so clamp to screen edge.
+                val xNear = if (sideDepth == 0) (if (xB > 0f) viewW / 2f else -viewW / 2f)
+                            else xB * viewW * viewDistance / (fovWidth * sideDepth)
+                val xFar = xB * viewW * viewDistance / (fovWidth * D)
+                if (xNear == xFar) continue
+                // xFar is the edge closer to screen centre; if it's already outside ±viewW/2 the
+                // whole strip is off-screen (the near edge is even further out).
+                if (xFar > viewW / 2f || xFar < -viewW / 2f) continue
+
+                // Angular occlusion check: the strip spans angles from xB/D (far end, smaller
+                // angle) to xB/sideDepth (near end, larger angle). For negative xB the signs
+                // flip but minOf/maxOf handles both sides symmetrically.
+                // sideDepth=0 is skipped to avoid dividing by zero; covered is still empty at
+                // that point so the check would always pass anyway.
+                if (sideDepth > 0) {
+                    val angleMin = minOf(xB / D, xB / sideDepth).coerceAtLeast(-frustumAngleHalf)
+                    val angleMax = maxOf(xB / D, xB / sideDepth).coerceAtMost(frustumAngleHalf)
+                    if (angleMin >= angleMax) continue
+                    if (subtractCoverage(angleMin to angleMax, covered).isEmpty()) continue
+                }
+
+                log("updateWalls", "add side wall lat=$wallLat, depth=$sideDepth")
+                newSideWalls.add(k to sideDepth)
+                val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
+                newSideWallCells[wCellX to wCellY] = "$k,$sideDepth"
+            }
+
+            // ---------------------------------------------------------------------------------
+            // Step 2 — Open→wall transition test: front walls at depth D
+            //
+            // A front face is only visible when the party can see the face directly — i.e. the
+            // cell at (lat, D) is a wall but the cell at (lat, D-1) is open. A wall preceded by
+            // another wall has no exposed front face. The angular coverage check then culls faces
+            // hidden behind closer walls across different lateral columns.
+            // ---------------------------------------------------------------------------------
+            for (lat in -latMax..latMax) {
+                val latLeft = lat - 0.5f
+                val latRight = lat + 0.5f
+
+                // Frustum clip: skip slots entirely outside the outer frustum boundary (e.g.
+                // lat=±3 with fovWidth=4 where fovHalf=2) or not yet visible at this depth
+                // (the frustum narrows toward the apex — at depth D only lats within
+                // ±D*fovHalf/viewDistance are in view).
+                if (maxOf(latLeft, -fovHalf) >= minOf(latRight, fovHalf)) continue
+                val visibleLatHalf = D * fovHalf / viewDistance
                 if (maxOf(latLeft, -visibleLatHalf) >= minOf(latRight, visibleLatHalf)) continue
 
-                val cellX = viewer.cellX + depth * viewer.facing.dx + lat * right.dx
-                val cellY = viewer.cellY + depth * viewer.facing.dy + lat * right.dy
+                val cellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
+                val cellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
                 if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) != CellType.WALL) continue
 
-                val prevCellX = viewer.cellX + (depth - 1) * viewer.facing.dx + lat * right.dx
-                val prevCellY = viewer.cellY + (depth - 1) * viewer.facing.dy + lat * right.dy
-                if (tileMapManager.tileMap.cellTypeAt(prevCellX, prevCellY) == CellType.WALL) continue
+                // Angular occlusion check: this slot occupies angles [latLeft/D, latRight/D]
+                // clipped to the frustum. If the entire interval is already covered by closer
+                // walls, the face is invisible.
+                val angleLeft = maxOf(latLeft / D, -frustumAngleHalf)
+                val angleRight = minOf(latRight / D, frustumAngleHalf)
+                if (angleLeft >= angleRight) continue
+                if (subtractCoverage(angleLeft to angleRight, covered).isEmpty()) continue
 
-                log("updateFrontWalls", "add wall $lat, $depth")
-                newWalls.add(lat to depth)
-                newFrontWallCells[cellX to cellY] = "$lat,$depth"
+                // Open→wall transition: only emit the face if the cell at depth D-1 is open.
+                // Walls with no exposed face are skipped here but still add to coverage in step 3.
+                val prevCellX = viewer.cellX + (D - 1) * viewer.facing.dx + lat * right.dx
+                val prevCellY = viewer.cellY + (D - 1) * viewer.facing.dy + lat * right.dy
+                if (tileMapManager.tileMap.cellTypeAt(prevCellX, prevCellY) != CellType.WALL) {
+                    log("updateWalls", "add front wall $lat, $D")
+                    newWalls.add(lat to D)
+                    newFrontWallCells[cellX to cellY] = "$lat,$D"
+                }
+            }
+
+            // ---------------------------------------------------------------------------------
+            // Step 3 — Coverage update: register solid wall cells at depth D
+            //
+            // Every solid cell at depth D — rendered or not — adds its angular interval to
+            // `covered`. This must happen AFTER steps 1 and 2 so that a wall doesn't shadow
+            // its own side face (step 1) or its own front face (step 2).
+            // ---------------------------------------------------------------------------------
+            for (lat in -latMax..latMax) {
+                val angleLeft = maxOf((lat - 0.5f) / D, -frustumAngleHalf)
+                val angleRight = minOf((lat + 0.5f) / D, frustumAngleHalf)
+                if (angleLeft >= angleRight) continue
+                val cellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
+                val cellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
+                if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
+                    mergeInto(covered, angleLeft to angleRight)
+                }
             }
         }
 
-        // Publish map-space coordinates so the minimap can highlight cells without conversion.
         _frontWallCells.value = newFrontWallCells
+        _sideWallCells.value = newSideWallCells
 
-        // Remove actors for (lat, depth) pairs that are no longer visible.
-        val keysToRemove = wallActors.keys.filter { it !in newWalls }
-        keysToRemove.forEach { key ->
-            wallActors.remove(key)?.let { actorManager.remove(it) }
-        }
+        syncFrontWallActors(newWalls, viewW, viewH)
+        syncSideWallActors(newSideWalls, viewW, viewH)
+    }
 
-        // Create actors for newly visible (lat, depth) pairs.
-        // Slot dimensions follow the perspective projection: at depth D with fovWidth=viewDistance,
-        // each slot is viewW/fovWidth wide and viewH/D tall, centred at lat * slotWidth.
-        // layerIndex: closer walls use a higher index so they paint on top of farther ones;
-        // the +1 keeps front walls above same-depth side walls from updateSideWalls.
+    // Diff-based actor lifecycle management for front walls.
+    //
+    // Compares the newly computed visibility set against the currently live actors:
+    // removes actors whose (lat, depth) slot is no longer visible, and creates actors
+    // for newly visible slots. Slots present in both sets are left untouched (no
+    // recreation cost when the player hasn't moved).
+    //
+    // Projection: at depth D each slot is viewW*viewDistance/(fovWidth*D) wide and
+    // viewH*wallHeightScale/D tall, centred at lat * slotWidth. Closer walls use a
+    // higher layerIndex (+1 offset keeps front walls above same-depth side walls).
+    private fun syncFrontWallActors(newWalls: Set<Pair<Int, Int>>, viewW: Float, viewH: Float) {
+        wallActors.keys.filter { it !in newWalls }
+            .forEach { key -> wallActors.remove(key)?.let { actorManager.remove(it) } }
+
         newWalls.filter { it !in wallActors }.forEach { key ->
             val (lat, dep) = key
-            val slotHeight = viewH * wallHeightScale / dep
             val slotWidth = viewW * viewDistance / (fovWidth * dep)
             val actor = FrontWallActor(
                 centerX = lat * slotWidth,
                 width = slotWidth,
-                height = slotHeight,
+                height = viewH * wallHeightScale / dep,
                 depth = dep,
                 viewDistance = viewDistance,
                 renderMode = { renderMode },
@@ -160,101 +299,33 @@ class DungeonRendererManager(
         }
     }
 
-    // Determines which side-wall trapezoids are visible and keeps their SideWallActors
-    // in sync. A side wall is the face running parallel to the viewing direction that appears
-    // whenever an open cell and a wall cell share a lateral boundary. Called every frame alongside
-    // updateFrontWalls when the viewer position/facing or viewport size changes.
-    private fun updateSideWalls(viewW: Float, viewH: Float) {
-        log("updateSideWalls")
-        val right = viewer.facing.turnedRight()
-        // Build the set of (k, depth) pairs that should have a SideWallActor this frame,
-        // and a parallel map of map-space wall cell coordinates for the minimap overlay.
-        val newSideWalls = mutableSetOf<Pair<Int, Int>>()
-        val newSideWallCells = mutableMapOf<Pair<Int, Int>, String>()
+    // Diff-based actor lifecycle management for side walls.
+    //
+    // Same diff pattern as syncFrontWallActors. Side wall geometry is a trapezoid:
+    //   xNear / yNearHalf — the party-side edge (wider, taller)
+    //   xFar  / yFarHalf  — the far edge (narrower, shorter)
+    // Both are derived from the perspective projection xB * viewW * viewDistance / (fovWidth * depth).
+    //
+    // Special cases:
+    //   depth=0: xNear formula diverges → clamp to ±viewW/2. yNearHalf is then derived from the
+    //     same perspective line as depth≥1 strips (y/|x| = constant) to avoid a visible bulge.
+    //   xNear overshoot: when xNear projects past ±viewW/2, clamp it and linearly interpolate
+    //     yNearHalf so the trapezoid meets the screen edge at the correct height.
+    private fun syncSideWallActors(newSideWalls: Set<Pair<Int, Int>>, viewW: Float, viewH: Float) {
+        sideWallActors.keys.filter { it !in newSideWalls }
+            .forEach { key -> sideWallActors.remove(key)?.let { actorManager.remove(it) } }
 
-        // k is latBoundaryTimes2: the boundary between leftLat=(k-1)/2 and rightLat=(k+1)/2
-        // sits at frustum x = k/2. For fovWidth=4: k ∈ {-3,-1,+1,+3}, boundaries at ±0.5, ±1.5.
-        // A side wall exists at boundary k, depth D when one of the two flanking cells is a wall
-        // and the other is open — that open/wall transition is the visible face.
-        val latMax = fovWidth / 2
-        for (k in -(2 * latMax - 1)..(2 * latMax - 1) step 2) {
-            val leftLat = (k - 1) / 2
-            val rightLat = (k + 1) / 2
-            // depth=0 covers the party's own row (walls immediately beside the party);
-            // depth=viewDistance-1 is the last depth strip before the view limit.
-            for (depth in 0 until viewDistance) {
-                val leftCellX = viewer.cellX + depth * viewer.facing.dx + leftLat * right.dx
-                val leftCellY = viewer.cellY + depth * viewer.facing.dy + leftLat * right.dy
-                val rightCellX = viewer.cellX + depth * viewer.facing.dx + rightLat * right.dx
-                val rightCellY = viewer.cellY + depth * viewer.facing.dy + rightLat * right.dy
-                val leftIsWall = tileMapManager.tileMap.cellTypeAt(leftCellX, leftCellY) == CellType.WALL
-                val rightIsWall = tileMapManager.tileMap.cellTypeAt(rightCellX, rightCellY) == CellType.WALL
-                // Only one side of the boundary is a wall → visible face.
-                if (leftIsWall != rightIsWall) {
-                    // Skip if the wall cell's inward neighbour (lat - sign(lat), same depth) is also
-                    // a wall — the face is interior to a wall block, hidden from the party.
-                    val wallLat = if (leftIsWall) leftLat else rightLat
-                    if (wallLat != 0) {
-                        val inwardLat = wallLat - if (wallLat > 0) 1 else -1
-                        val inwardCellX = viewer.cellX + depth * viewer.facing.dx + inwardLat * right.dx
-                        val inwardCellY = viewer.cellY + depth * viewer.facing.dy + inwardLat * right.dy
-                        if (tileMapManager.tileMap.cellTypeAt(inwardCellX, inwardCellY) == CellType.WALL) continue
-                    }
-
-                    // Pre-compute the near/far screen x to skip zero-width trapezoids.
-                    // At depth=0, k=±1: xNear and xFar both equal ±viewW/2, so width=0 and
-                    // SideWallActor.draw() would return early — no point creating the actor.
-                    val xB = k / 2f
-                    val xNear = if (depth == 0) (if (xB > 0f) viewW / 2f else -viewW / 2f)
-                                else xB * viewW * viewDistance / (fovWidth * depth)
-                    val xFar = xB * viewW * viewDistance / (fovWidth * (depth + 1))
-                    if (xNear == xFar) continue
-                    // Skip strips whose far edge (the one closer to screen centre) is already outside
-                    // the frustum — the entire strip is off-screen.
-                    if (xFar > viewW / 2f || xFar < -viewW / 2f) continue
-
-                    log("updateSideWalls", "add wall lat=$wallLat, depth=$depth")
-                    newSideWalls.add(k to depth)
-                    // Record the wall cell's map coordinates so the minimap needs no conversion.
-                    val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
-                    newSideWallCells[wCellX to wCellY] = "$k,$depth"
-                }
-            }
-        }
-
-        // Publish map-space coordinates so the minimap can highlight cells without conversion.
-        _sideWallCells.value = newSideWallCells
-
-        // Remove actors for boundaries that are no longer visible.
-        val keysToRemove = sideWallActors.keys.filter { it !in newSideWalls }
-        keysToRemove.forEach { key -> sideWallActors.remove(key)?.let { actorManager.remove(it) } }
-
-        // Create actors for newly visible boundaries.
-        // Each side wall is a depth strip: a trapezoid whose near edge is at (xNear, ±yNearHalf)
-        // and far edge at (xFar, ±yFarHalf), both derived from the perspective projection.
-        // At depth=0, xNear is clamped to the screen edge (±viewW/2) because the formula
-        // xB * viewW * viewDistance / (fovWidth * depth) diverges as depth → 0.
-        // layerIndex: same depth as a front wall but one step lower, so front walls paint on top.
         newSideWalls.filter { it !in sideWallActors }.forEach { key ->
             val (k, depth) = key
             val xB = k / 2f
-            val xNear = if (depth == 0) {
-                // Wall immediately beside the party: near edge reaches the screen edge.
-                if (xB > 0f) viewW / 2f else -viewW / 2f
-            } else {
-                xB * viewW * viewDistance / (fovWidth * depth)
-            }
-            // Far edge is always one depth step further using the standard perspective formula.
+            val xNear = if (depth == 0) (if (xB > 0f) viewW / 2f else -viewW / 2f)
+                        else xB * viewW * viewDistance / (fovWidth * depth)
             val xFar = xB * viewW * viewDistance / (fovWidth * (depth + 1))
             val yFarHalf = viewH * wallHeightScale / (2f * (depth + 1))
-            // At depth=0 the x formula diverges, so xNear is clamped to ±viewW/2. Derive yNearHalf
-            // from the same perspective line as depth≥1 strips: y/|x| is constant, so
-            // yNearHalf = (viewW/2) × yFarHalf / |xFar|. Using viewH/2 here breaks that line
-            // and causes a visible bulge whenever wallHeightScale ≠ 2×|xB|×viewDistance/fovWidth.
+            // Perspective-line invariant: y/|x| is constant for depth≥1 edges. At depth=0 the
+            // x formula is clamped, so derive yNearHalf from the same line rather than viewH/2.
             val yNearHalf = if (depth == 0) (viewW / 2f) * yFarHalf / kotlin.math.abs(xFar)
                             else viewH * wallHeightScale / (2f * depth)
-            // If the near edge overshoots the frustum boundary, clamp it and interpolate the height
-            // at the clip point so the trapezoid meets the screen edge at the right size.
             val clampedXNear = xNear.coerceIn(-viewW / 2f, viewW / 2f)
             val clampedYNearHalf = if (clampedXNear == xNear || xFar == xNear) yNearHalf
                 else yNearHalf + (clampedXNear - xNear) / (xFar - xNear) * (yFarHalf - yNearHalf)
@@ -277,4 +348,52 @@ class DungeonRendererManager(
         }
     }
 
+    // Angular interval subtraction — the read side of the occlusion buffer.
+    //
+    // Returns the sub-intervals of [interval] not yet covered by any entry in [covered].
+    // An empty result means the interval is fully occluded; a non-empty result means at least
+    // part of it is still visible. The caller only needs to know whether the result is empty
+    // or not — the actual sub-intervals are not used further.
+    private fun subtractCoverage(
+        interval: Pair<Float, Float>,
+        covered: List<Pair<Float, Float>>,
+    ): List<Pair<Float, Float>> {
+        var remaining = listOf(interval)
+        for ((covL, covR) in covered) {
+            remaining = remaining.flatMap { (a, b) ->
+                buildList {
+                    if (a < covL) add(a to minOf(b, covL))
+                    if (b > covR) add(maxOf(a, covR) to b)
+                }
+            }
+            if (remaining.isEmpty()) break
+        }
+        return remaining
+    }
+
+    // Angular interval union — the write side of the occlusion buffer.
+    //
+    // Inserts [newInterval] into [covered], merging any overlapping or touching entries so the
+    // list stays sorted and non-overlapping. This is an O(n) single-pass merge: walk the existing
+    // list, emit intervals that end before the new one starts unchanged, absorb intervals that
+    // overlap (expanding the new interval to their union), then emit intervals that start after
+    // the new one unchanged.
+    private fun mergeInto(covered: MutableList<Pair<Float, Float>>, newInterval: Pair<Float, Float>) {
+        var (l, r) = newInterval
+        val merged = mutableListOf<Pair<Float, Float>>()
+        var inserted = false
+        for ((covL, covR) in covered) {
+            when {
+                covR < l -> merged.add(covL to covR)
+                covL > r -> {
+                    if (!inserted) { merged.add(l to r); inserted = true }
+                    merged.add(covL to covR)
+                }
+                else -> { l = minOf(l, covL); r = maxOf(r, covR) }
+            }
+        }
+        if (!inserted) merged.add(l to r)
+        covered.clear()
+        covered.addAll(merged)
+    }
 }
