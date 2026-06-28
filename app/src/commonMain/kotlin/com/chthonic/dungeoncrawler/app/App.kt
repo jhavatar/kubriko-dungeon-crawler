@@ -13,9 +13,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.chthonic.dungeoncrawler.renderer.DungeonRendererManager
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.Mob
@@ -74,7 +77,15 @@ fun DungeonCrawlerApp() {
         DungeonRendererManager(
             fovWidth = 5,
             viewer = viewer,
-            textMeasurer = textMeasurer,
+            debugLabelProvider = { text, isSideWall ->
+                textMeasurer.measure(
+                    text,
+                    style = TextStyle(
+                        fontSize = 12.sp,
+                        color = if (isSideWall) Color.Cyan else Color.Yellow,
+                    ),
+                )
+            },
             isLoggingEnabled = true
         )
     }
@@ -94,8 +105,8 @@ fun DungeonCrawlerApp() {
         }
     }
 
-    val frontWallCells by dungeonRenderer.frontWallCells
-    val sideWallCells by dungeonRenderer.sideWallCells
+    val frontWallCells by dungeonRenderer.frontWallCells.collectAsState()
+    val sideWallCells by dungeonRenderer.sideWallCells.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         KubrikoViewport(
