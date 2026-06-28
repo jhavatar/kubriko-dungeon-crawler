@@ -39,6 +39,7 @@ class DungeonViewActor(
     )
 
     var drawCommands: List<DrawCommand> = emptyList()
+    private val trapezoidPath = Path()
 
     override fun DrawScope.draw() {
         val mode = renderMode()
@@ -76,19 +77,17 @@ class DungeonViewActor(
         val rightIsEdge = cmd.xRight == cmd.xWallRight
         when (mode) {
             RenderMode.WIREFRAME -> {
-                val c = Color(0xFF6B4F3B)
-                drawLine(c, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), 4f)
-                drawLine(c, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), 4f)
-                if (leftIsEdge) drawLine(c, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), 4f)
-                if (rightIsEdge) drawLine(c, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), 4f)
+                drawLine(WIREFRAME_FRONT_COLOR, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), WIREFRAME_STROKE)
+                drawLine(WIREFRAME_FRONT_COLOR, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
+                if (leftIsEdge) drawLine(WIREFRAME_FRONT_COLOR, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), WIREFRAME_STROKE)
+                if (rightIsEdge) drawLine(WIREFRAME_FRONT_COLOR, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
             }
             RenderMode.TEXTURED -> {
                 drawRect(color = cmd.color, topLeft = Offset(cmd.xLeft, cmd.yTop), size = Size(cmd.xRight - cmd.xLeft, cmd.yBottom - cmd.yTop))
-                val c = Color(0f, 0f, 0f, 0.4f)
-                drawLine(c, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), 2f)
-                drawLine(c, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), 2f)
-                if (leftIsEdge) drawLine(c, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), 2f)
-                if (rightIsEdge) drawLine(c, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), 2f)
+                drawLine(BORDER_COLOR, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), BORDER_STROKE)
+                drawLine(BORDER_COLOR, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), BORDER_STROKE)
+                if (leftIsEdge) drawLine(BORDER_COLOR, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), BORDER_STROKE)
+                if (rightIsEdge) drawLine(BORDER_COLOR, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), BORDER_STROKE)
             }
         }
         cmd.debugLabel?.let { layout ->
@@ -111,27 +110,25 @@ class DungeonViewActor(
         clipRect(left = cmd.xClipLeft, top = cmd.yNearTop, right = cmd.xClipRight, bottom = cmd.yNearBot) {
             when (mode) {
                 RenderMode.WIREFRAME -> {
-                    val c = Color(0xFF4A3728)
                     // Slopes drawn as lines — clipRect cuts them cleanly at sub-interval
                     // bounds without a vertical stroke appearing at the clip edge.
-                    drawLine(c, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xFar, cmd.yFarTop), 4f)
-                    drawLine(c, Offset(cmd.xNear, cmd.yNearBot), Offset(cmd.xFar, cmd.yFarBot), 4f)
-                    if (nearInClip) drawLine(c, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), 4f)
-                    if (farInClip) drawLine(c, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), 4f)
+                    drawLine(WIREFRAME_SIDE_COLOR, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xFar, cmd.yFarTop), WIREFRAME_STROKE)
+                    drawLine(WIREFRAME_SIDE_COLOR, Offset(cmd.xNear, cmd.yNearBot), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
+                    if (nearInClip) drawLine(WIREFRAME_SIDE_COLOR, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), WIREFRAME_STROKE)
+                    if (farInClip) drawLine(WIREFRAME_SIDE_COLOR, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
                 }
                 RenderMode.TEXTURED -> {
-                    drawPath(Path().apply {
-                        moveTo(cmd.xNear, cmd.yNearTop)
-                        lineTo(cmd.xNear, cmd.yNearBot)
-                        lineTo(cmd.xFar, cmd.yFarBot)
-                        lineTo(cmd.xFar, cmd.yFarTop)
-                        close()
-                    }, color = cmd.color)
-                    val c = Color(0f, 0f, 0f, 0.4f)
-                    drawLine(c, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xFar, cmd.yFarTop), 2f)
-                    drawLine(c, Offset(cmd.xNear, cmd.yNearBot), Offset(cmd.xFar, cmd.yFarBot), 2f)
-                    if (nearInClip) drawLine(c, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), 2f)
-                    if (farInClip) drawLine(c, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), 2f)
+                    trapezoidPath.reset()
+                    trapezoidPath.moveTo(cmd.xNear, cmd.yNearTop)
+                    trapezoidPath.lineTo(cmd.xNear, cmd.yNearBot)
+                    trapezoidPath.lineTo(cmd.xFar, cmd.yFarBot)
+                    trapezoidPath.lineTo(cmd.xFar, cmd.yFarTop)
+                    trapezoidPath.close()
+                    drawPath(trapezoidPath, color = cmd.color)
+                    drawLine(BORDER_COLOR, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xFar, cmd.yFarTop), BORDER_STROKE)
+                    drawLine(BORDER_COLOR, Offset(cmd.xNear, cmd.yNearBot), Offset(cmd.xFar, cmd.yFarBot), BORDER_STROKE)
+                    if (nearInClip) drawLine(BORDER_COLOR, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), BORDER_STROKE)
+                    if (farInClip) drawLine(BORDER_COLOR, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), BORDER_STROKE)
                 }
             }
         }
@@ -146,5 +143,13 @@ class DungeonViewActor(
                 ),
             )
         }
+    }
+
+    private companion object {
+        val WIREFRAME_FRONT_COLOR = Color(0xFF6B4F3B)
+        val WIREFRAME_SIDE_COLOR  = Color(0xFF4A3728)
+        val BORDER_COLOR          = Color(0f, 0f, 0f, 0.4f)
+        const val WIREFRAME_STROKE = 4f
+        const val BORDER_STROKE    = 2f
     }
 }

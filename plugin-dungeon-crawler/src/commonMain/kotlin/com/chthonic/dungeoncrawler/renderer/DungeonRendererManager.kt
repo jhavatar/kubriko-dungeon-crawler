@@ -87,7 +87,7 @@ class DungeonRendererManager(
         lastViewH = viewH
         lastRenderMode = renderMode
         log("onUpdate")
-        dungeonViewActor?.drawCommands = updateWalls(viewW, viewH)
+        checkNotNull(dungeonViewActor).drawCommands = updateWalls(viewW, viewH)
     }
 
     // Front-to-back angular occlusion traversal.
@@ -187,8 +187,9 @@ class DungeonRendererManager(
     //   For typical blobber values (D=4, W=5): ≈100 iterations per frame — effectively O(1).
     private fun updateWalls(viewW: Float, viewH: Float): List<DrawCommand> {
         log("updateWalls")
+        val tileMap = tileMapManager.tileMap
         val right = viewer.facing.turnedRight()
-        val latMax = fovWidth / 2
+        val latMax = fovHalf.toInt()
         val newFrontWallCells = mutableMapOf<Pair<Int, Int>, String>()
         val newSideWallCells = mutableMapOf<Pair<Int, Int>, String>()
 
@@ -268,8 +269,8 @@ class DungeonRendererManager(
                 val leftCellY = viewer.cellY + sideDepth * viewer.facing.dy + leftLat * right.dy
                 val rightCellX = viewer.cellX + sideDepth * viewer.facing.dx + rightLat * right.dx
                 val rightCellY = viewer.cellY + sideDepth * viewer.facing.dy + rightLat * right.dy
-                val leftIsWall = tileMapManager.tileMap.cellTypeAt(leftCellX, leftCellY) == CellType.WALL
-                val rightIsWall = tileMapManager.tileMap.cellTypeAt(rightCellX, rightCellY) == CellType.WALL
+                val leftIsWall = tileMap.cellTypeAt(leftCellX, leftCellY) == CellType.WALL
+                val rightIsWall = tileMap.cellTypeAt(rightCellX, rightCellY) == CellType.WALL
                 // Both cells same type → interior seam (wall/wall) or open gap (open/open): no face.
                 if (leftIsWall == rightIsWall) continue
 
@@ -281,7 +282,7 @@ class DungeonRendererManager(
                     val inwardLat = wallLat - if (wallLat > 0) 1 else -1
                     val inwardCellX = viewer.cellX + sideDepth * viewer.facing.dx + inwardLat * right.dx
                     val inwardCellY = viewer.cellY + sideDepth * viewer.facing.dy + inwardLat * right.dy
-                    if (tileMapManager.tileMap.cellTypeAt(inwardCellX, inwardCellY) == CellType.WALL) continue
+                    if (tileMap.cellTypeAt(inwardCellX, inwardCellY) == CellType.WALL) continue
                 }
 
                 // Geometry pre-check: skip zero-width trapezoids and strips entirely off-screen.
@@ -341,7 +342,7 @@ class DungeonRendererManager(
                         color = color,
                         debugLabel = if (idx == 0) textMeasurer?.measure(
                             "$k,$sideDepth",
-                            style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Cyan),
+                            style = TextStyle(fontSize = DEBUG_LABEL_SIZE, color = androidx.compose.ui.graphics.Color.Cyan),
                         ) else null,
                     ))
                 }
@@ -373,7 +374,7 @@ class DungeonRendererManager(
 
                 val cellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
                 val cellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
-                if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) != CellType.WALL) continue
+                if (tileMap.cellTypeAt(cellX, cellY) != CellType.WALL) continue
 
                 // Angular occlusion check: use the sub-intervals directly for clipped rendering.
                 val angleLeft = maxOf(latLeft / D, -frustumAngleHalf)
@@ -386,7 +387,7 @@ class DungeonRendererManager(
                 // Walls with no exposed face are skipped here but still add to coverage in step 3.
                 val prevCellX = viewer.cellX + (D - 1) * viewer.facing.dx + lat * right.dx
                 val prevCellY = viewer.cellY + (D - 1) * viewer.facing.dy + lat * right.dy
-                if (tileMapManager.tileMap.cellTypeAt(prevCellX, prevCellY) != CellType.WALL) {
+                if (tileMap.cellTypeAt(prevCellX, prevCellY) != CellType.WALL) {
                     log("updateWalls", "add front wall $lat, $D")
                     newFrontWallCells[cellX to cellY] = "$lat,$D"
 
@@ -408,7 +409,7 @@ class DungeonRendererManager(
                             xWallRight = xWallRight_ds,
                             debugLabel = if (idx == 0) textMeasurer?.measure(
                                 "$lat,$D",
-                                style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Yellow),
+                                style = TextStyle(fontSize = DEBUG_LABEL_SIZE, color = androidx.compose.ui.graphics.Color.Yellow),
                             ) else null,
                         ))
                     }
@@ -428,7 +429,7 @@ class DungeonRendererManager(
                 if (angleLeft >= angleRight) continue
                 val cellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
                 val cellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
-                if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
+                if (tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
                     mergeInto(covered, angleLeft to angleRight)
                 }
             }
@@ -445,7 +446,7 @@ class DungeonRendererManager(
 
                 val fCellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
                 val fCellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
-                if (tileMapManager.tileMap.cellTypeAt(fCellX, fCellY) == CellType.WALL) continue
+                if (tileMap.cellTypeAt(fCellX, fCellY) == CellType.WALL) continue
 
                 val angleLeft = maxOf(latLeft / D, -frustumAngleHalf)
                 val angleRight = minOf(latRight / D, frustumAngleHalf)
@@ -461,8 +462,8 @@ class DungeonRendererManager(
             }
         }
 
-        _frontWallCells.value = newFrontWallCells
-        _sideWallCells.value = newSideWallCells
+        if (newFrontWallCells != _frontWallCells.value) _frontWallCells.value = newFrontWallCells
+        if (newSideWallCells != _sideWallCells.value) _sideWallCells.value = newSideWallCells
 
         return drawCommands
     }
@@ -470,29 +471,59 @@ class DungeonRendererManager(
     // Warm stone colours for front walls: nearer cells are brighter (torchlight falloff).
     private fun frontWallTexturedColor(depth: Int): Color {
         val t = 1f - (depth - 1f) / (viewDistance - 1f).coerceAtLeast(1f)
-        return Color(red = 0.18f + 0.36f * t, green = 0.10f + 0.27f * t, blue = 0.05f + 0.17f * t)
+        return Color(
+            red   = WALL_R + WALL_R_RANGE * t,
+            green = WALL_G + WALL_G_RANGE * t,
+            blue  = WALL_B + WALL_B_RANGE * t,
+        )
     }
 
     // Side walls are darker (face away from the imagined torch carried by the party).
     private fun sideWallTexturedColor(depth: Int): Color {
         val t = 1f - depth.toFloat() / viewDistance.toFloat()
         return Color(
-            red = (0.18f + 0.36f * t) * 0.65f,
-            green = (0.10f + 0.27f * t) * 0.65f,
-            blue = (0.05f + 0.17f * t) * 0.65f,
+            red   = (WALL_R + WALL_R_RANGE * t) * SIDE_WALL_SHADOW,
+            green = (WALL_G + WALL_G_RANGE * t) * SIDE_WALL_SHADOW,
+            blue  = (WALL_B + WALL_B_RANGE * t) * SIDE_WALL_SHADOW,
         )
     }
 
     // Floor: warm dark stone, slightly brighter closer to the viewer.
     private fun floorBandColor(depth: Int): Color {
         val t = 1f - depth.toFloat() / (viewDistance + 1f)
-        return Color(red = 0.08f + 0.10f * t, green = 0.05f + 0.07f * t, blue = 0.02f + 0.03f * t)
+        return Color(
+            red   = FLOOR_R + FLOOR_R_RANGE * t,
+            green = FLOOR_G + FLOOR_G_RANGE * t,
+            blue  = FLOOR_B + FLOOR_B_RANGE * t,
+        )
     }
 
     // Ceiling: cooler and darker than the floor (less direct torchlight reaches the vault).
     private fun ceilingBandColor(depth: Int): Color {
         val t = 1f - depth.toFloat() / (viewDistance + 1f)
-        return Color(red = 0.05f + 0.06f * t, green = 0.03f + 0.04f * t, blue = 0.01f + 0.03f * t)
+        return Color(
+            red   = CEIL_R + CEIL_R_RANGE * t,
+            green = CEIL_G + CEIL_G_RANGE * t,
+            blue  = CEIL_B + CEIL_B_RANGE * t,
+        )
+    }
+
+    private companion object {
+        // Torchlight wall gradient: base (far/dark) + range (added at t=1 = near/bright).
+        const val WALL_R = 0.18f;         const val WALL_R_RANGE = 0.36f
+        const val WALL_G = 0.10f;         const val WALL_G_RANGE = 0.27f
+        const val WALL_B = 0.05f;         const val WALL_B_RANGE = 0.17f
+        // Side walls face away from the torch: attenuated by this factor.
+        const val SIDE_WALL_SHADOW = 0.65f
+        // Floor/ceiling colour gradients.
+        const val FLOOR_R = 0.08f;        const val FLOOR_R_RANGE = 0.10f
+        const val FLOOR_G = 0.05f;        const val FLOOR_G_RANGE = 0.07f
+        const val FLOOR_B = 0.02f;        const val FLOOR_B_RANGE = 0.03f
+        const val CEIL_R  = 0.05f;        const val CEIL_R_RANGE  = 0.06f
+        const val CEIL_G  = 0.03f;        const val CEIL_G_RANGE  = 0.04f
+        const val CEIL_B  = 0.01f;        const val CEIL_B_RANGE  = 0.03f
+        // Debug label size (non-const: TextUnit is not a primitive).
+        val DEBUG_LABEL_SIZE = 12.sp
     }
 
     // Angular interval subtraction — the read side of the occlusion buffer.
