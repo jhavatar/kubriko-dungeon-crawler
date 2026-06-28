@@ -2,6 +2,7 @@ package com.chthonic.dungeoncrawler.renderer
 
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
@@ -26,7 +27,7 @@ class DungeonRendererManager(
     val wallHeightScale: Float = 0.8f,
     // Switches between solid-colour textured rendering and wireframe outline rendering.
     var renderMode: RenderMode = RenderMode.TEXTURED,
-    // When non-null, enables debug labels drawn on each wall actor showing its (lat,depth) or
+    // When non-null, enables debug labels drawn on each wall strip showing its (lat,depth) or
     // (k,depth) slot coordinates.
     private val textMeasurer: TextMeasurer? = null,
     isLoggingEnabled: Boolean = false,
@@ -40,8 +41,7 @@ class DungeonRendererManager(
     private val actorManager by manager<ActorManager>()
     private val viewportManager by manager<ViewportManager>()
 
-    private val wallActors = mutableMapOf<Pair<Int, Int>, FrontWallActor>()
-    private val sideWallActors = mutableMapOf<Pair<Int, Int>, SideWallActor>()
+    private var dungeonViewActor: DungeonViewActor? = null
     private var lastCellX: Int? = null
     private var lastCellY: Int? = null
     private var lastFacing: Facing? = null
@@ -68,11 +68,11 @@ class DungeonRendererManager(
         val positionChanged = viewer.cellX != lastCellX || viewer.cellY != lastCellY || viewer.facing != lastFacing
         if (!positionChanged && !viewChanged) return
 
-        if (viewChanged) {
-            wallActors.values.forEach { actorManager.remove(it) }
-            wallActors.clear()
-            sideWallActors.values.forEach { actorManager.remove(it) }
-            sideWallActors.clear()
+        if (viewChanged || dungeonViewActor == null) {
+            dungeonViewActor?.let { actorManager.remove(it) }
+            val actor = DungeonViewActor(viewW, viewH, renderMode = { renderMode })
+            dungeonViewActor = actor
+            actorManager.add(actor)
         }
 
         lastCellX = viewer.cellX
@@ -81,13 +81,14 @@ class DungeonRendererManager(
         lastViewW = viewW
         lastViewH = viewH
         log("onUpdate")
-        updateWalls(viewW, viewH)
+        dungeonViewActor?.drawCommands = updateWalls(viewW, viewH)
     }
 
     // Front-to-back angular occlusion traversal.
     //
-    // Determines the complete set of visible front-face and side-face wall slots this frame,
-    // then delegates actor lifecycle management to syncFrontWallActors / syncSideWallActors.
+    // Builds the complete list of DrawCommands for this frame: floor/ceiling depth bands
+    // followed by all visible wall strips in front-to-back traversal order. The single
+    // DungeonViewActor replays this list every frame — no actor churn, no layerIndex ordering.
     //
     // -----------------------------------------------------------------------------------------
     // Core invariant — angle = lateral / depth
@@ -178,19 +179,65 @@ class DungeonRendererManager(
     //
     //   Total: O(D × W × n) = O(D × W²).
     //   For typical blobber values (D=4, W=5): ≈100 iterations per frame — effectively O(1).
-    private fun updateWalls(viewW: Float, viewH: Float) {
+    private fun updateWalls(viewW: Float, viewH: Float): List<DrawCommand> {
         log("updateWalls")
         val right = viewer.facing.turnedRight()
         val latMax = fovWidth / 2
-        val newWalls = mutableSetOf<Pair<Int, Int>>()
         val newFrontWallCells = mutableMapOf<Pair<Int, Int>, String>()
-        val newSideWalls = mutableSetOf<Pair<Int, Int>>()
         val newSideWallCells = mutableMapOf<Pair<Int, Int>, String>()
 
         // frustumAngleHalf is the maximum visible angle: a ray to the far corner of the outermost
         // slot (lat = ±fovHalf at depth = viewDistance) has angle ±fovHalf/viewDistance.
         val frustumAngleHalf = fovHalf / viewDistance
         val covered = mutableListOf<Pair<Float, Float>>()
+
+        // Converts an angular position to a DrawScope x coordinate.
+        // screen_x_scene = angle × viewW × viewDistance / fovWidth; +viewW/2 offsets to DrawScope.
+        val angleToX = viewW * viewDistance.toFloat() / fovWidth.toFloat()
+        fun Float.toDsX() = this * angleToX + viewW / 2f
+
+        val drawCommands = mutableListOf<DrawCommand>()
+
+        // ---------------------------------------------------------------------------------
+        // Floor and ceiling: emitted as per-(lat, depth) cell slots so each cell can
+        // eventually carry its own texture.
+        //
+        // yWallBottom(D) = viewH/2 + wallHeightScale × viewH / (2 × D) — screen-y of the
+        // base of a depth-D wall.  Open cell (lat, D) occupies floor strip:
+        //   y ∈ [yWallBottom(D+1), yWallBottom(D)],  x ∈ angular sub-interval of that slot.
+        //
+        // Emission order:
+        //   • Near band (depth 0→1): viewer's own floor, always full frustum width.
+        //   • Per slot (lat, D) after step 3 of depth D: only open cells, angular-occlusion culled.
+        //   Beyond viewDistance nothing is drawn — the viewport background (black) provides the cutoff.
+        // ---------------------------------------------------------------------------------
+        fun wallBottomY(d: Int): Float = viewH / 2f + wallHeightScale * viewH / (2f * d)
+
+        fun emitFloorCeiling(
+            yTop: Float,
+            yBottom: Float,
+            subIntervals: List<Pair<Float, Float>>,
+            floorColor: Color,
+            ceilColor: Color,
+        ) {
+            for ((αA, αB) in subIntervals) {
+                drawCommands.add(DrawCommand.FloorCeilingBand(
+                    yFloorClipTop = yTop,
+                    yFloorClipBottom = yBottom,
+                    xClipLeft = αA.toDsX(),
+                    xClipRight = αB.toDsX(),
+                    floorColor = floorColor,
+                    ceilColor = ceilColor,
+                ))
+            }
+        }
+
+        // Near band: floor/ceiling of viewer's own cell — always full frustum width.
+        emitFloorCeiling(
+            yTop = wallBottomY(1), yBottom = viewH,
+            subIntervals = listOf(-frustumAngleHalf to frustumAngleHalf),
+            floorColor = floorBandColor(0), ceilColor = ceilingBandColor(0),
+        )
 
         for (D in 1..viewDistance) {
             val sideDepth = D - 1  // near depth of this strip; far depth is D
@@ -244,17 +291,81 @@ class DungeonRendererManager(
                 // flip but minOf/maxOf handles both sides symmetrically.
                 // sideDepth=0 is skipped to avoid dividing by zero; covered is still empty at
                 // that point so the check would always pass anyway.
+                // Angular extent of this strip. For sideDepth=0 the near end extends to the
+                // screen edge (÷0 avoided by clamping to ±frustumAngleHalf directly).
+                val nearAngle = if (sideDepth == 0) (if (xB > 0f) frustumAngleHalf else -frustumAngleHalf)
+                                else xB / sideDepth
+                val sideAngleMin = minOf(xB / D, nearAngle).coerceAtLeast(-frustumAngleHalf)
+                val sideAngleMax = maxOf(xB / D, nearAngle).coerceAtMost(frustumAngleHalf)
+
+                val subIntervals: List<Pair<Float, Float>>
                 if (sideDepth > 0) {
-                    val angleMin = minOf(xB / D, xB / sideDepth).coerceAtLeast(-frustumAngleHalf)
-                    val angleMax = maxOf(xB / D, xB / sideDepth).coerceAtMost(frustumAngleHalf)
-                    if (angleMin >= angleMax) continue
-                    if (subtractCoverage(angleMin to angleMax, covered).isEmpty()) continue
+                    if (sideAngleMin >= sideAngleMax) continue
+                    val remaining = subtractCoverage(sideAngleMin to sideAngleMax, covered)
+                    if (remaining.isEmpty()) continue
+                    subIntervals = remaining
+                } else {
+                    subIntervals = emptyList()
                 }
 
+                // Trapezoid geometry (same projection as the old syncSideWallActors).
+                val yFarHalf = viewH * wallHeightScale / (2f * D)
+                val yNearHalf = if (sideDepth == 0) (viewW / 2f) * yFarHalf / kotlin.math.abs(xFar)
+                               else viewH * wallHeightScale / (2f * sideDepth)
+                val clampedXNear = xNear.coerceIn(-viewW / 2f, viewW / 2f)
+                val clampedYNearHalf = if (clampedXNear == xNear || xFar == xNear) yNearHalf
+                    else yNearHalf + (clampedXNear - xNear) / (xFar - xNear) * (yFarHalf - yNearHalf)
+
+                // Convert scene-space trapezoid to DrawScope space (origin = viewport top-left).
+                val xNear_ds = clampedXNear + viewW / 2f
+                val xFar_ds = xFar + viewW / 2f
+                val yNearTop_ds = viewH / 2f - clampedYNearHalf
+                val yNearBot_ds = viewH / 2f + clampedYNearHalf
+                val yFarTop_ds = viewH / 2f - yFarHalf
+                val yFarBot_ds = viewH / 2f + yFarHalf
+                val color = sideWallTexturedColor(sideDepth)
+
                 log("updateWalls", "add side wall lat=$wallLat, depth=$sideDepth")
-                newSideWalls.add(k to sideDepth)
                 val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
                 newSideWallCells[wCellX to wCellY] = "$k,$sideDepth"
+
+                if (sideDepth == 0) {
+                    // No coverage check at depth=0; clip to the full trapezoid x-extent.
+                    drawCommands.add(DrawCommand.SideStrip(
+                        xNear = xNear_ds, xFar = xFar_ds,
+                        yNearTop = yNearTop_ds, yNearBot = yNearBot_ds,
+                        yFarTop = yFarTop_ds, yFarBot = yFarBot_ds,
+                        xClipLeft = minOf(xNear_ds, xFar_ds),
+                        xClipRight = maxOf(xNear_ds, xFar_ds),
+                        color = color,
+                        debugLabel = textMeasurer?.measure(
+                            "$k,$sideDepth",
+                            style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Cyan),
+                        ),
+                    ))
+                } else {
+                    // One strip per visible sub-interval; debug label on the first only.
+                    subIntervals.forEachIndexed { idx, (subA, subB) ->
+                        drawCommands.add(DrawCommand.SideStrip(
+                            xNear = xNear_ds, xFar = xFar_ds,
+                            yNearTop = yNearTop_ds, yNearBot = yNearBot_ds,
+                            yFarTop = yFarTop_ds, yFarBot = yFarBot_ds,
+                            xClipLeft = subA.toDsX(),
+                            xClipRight = subB.toDsX(),
+                            color = color,
+                            debugLabel = if (idx == 0) textMeasurer?.measure(
+                                "$k,$sideDepth",
+                                style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Cyan),
+                            ) else null,
+                        ))
+                    }
+                }
+                // Side walls are solid surfaces — mark their angular range covered so
+                // deeper features in the same angular interval are correctly occluded.
+                // Applies to sideDepth=0 too: the depth-0 cell that spawned the wall is never
+                // processed by step 3 (which only covers depth-D cells), so its angular range
+                // would otherwise remain uncovered.
+                mergeInto(covered, sideAngleMin to sideAngleMax)
             }
 
             // ---------------------------------------------------------------------------------
@@ -281,13 +392,12 @@ class DungeonRendererManager(
                 val cellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
                 if (tileMapManager.tileMap.cellTypeAt(cellX, cellY) != CellType.WALL) continue
 
-                // Angular occlusion check: this slot occupies angles [latLeft/D, latRight/D]
-                // clipped to the frustum. If the entire interval is already covered by closer
-                // walls, the face is invisible.
+                // Angular occlusion check: use the sub-intervals directly for clipped rendering.
                 val angleLeft = maxOf(latLeft / D, -frustumAngleHalf)
                 val angleRight = minOf(latRight / D, frustumAngleHalf)
                 if (angleLeft >= angleRight) continue
-                if (subtractCoverage(angleLeft to angleRight, covered).isEmpty()) continue
+                val subIntervals = subtractCoverage(angleLeft to angleRight, covered)
+                if (subIntervals.isEmpty()) continue
 
                 // Open→wall transition: only emit the face if the cell at depth D-1 is open.
                 // Walls with no exposed face are skipped here but still add to coverage in step 3.
@@ -295,8 +405,30 @@ class DungeonRendererManager(
                 val prevCellY = viewer.cellY + (D - 1) * viewer.facing.dy + lat * right.dy
                 if (tileMapManager.tileMap.cellTypeAt(prevCellX, prevCellY) != CellType.WALL) {
                     log("updateWalls", "add front wall $lat, $D")
-                    newWalls.add(lat to D)
                     newFrontWallCells[cellX to cellY] = "$lat,$D"
+
+                    val slotHeight = viewH * wallHeightScale / D
+                    val yTop = viewH / 2f - slotHeight / 2f
+                    val yBottom = viewH / 2f + slotHeight / 2f
+                    val color = frontWallTexturedColor(D)
+
+                    val xWallLeft_ds = angleLeft.toDsX()
+                    val xWallRight_ds = angleRight.toDsX()
+                    subIntervals.forEachIndexed { idx, (subA, subB) ->
+                        drawCommands.add(DrawCommand.FrontStrip(
+                            xLeft = subA.toDsX(),
+                            xRight = subB.toDsX(),
+                            yTop = yTop,
+                            yBottom = yBottom,
+                            color = color,
+                            xWallLeft = xWallLeft_ds,
+                            xWallRight = xWallRight_ds,
+                            debugLabel = if (idx == 0) textMeasurer?.measure(
+                                "$lat,$D",
+                                style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Yellow),
+                            ) else null,
+                        ))
+                    }
                 }
             }
 
@@ -317,105 +449,74 @@ class DungeonRendererManager(
                     mergeInto(covered, angleLeft to angleRight)
                 }
             }
+
+            // Floor/ceiling per open cell at depth D.
+            // Emitted after step 3 so coverage includes every wall at depths 1..D.
+            // Only open cells emit (wall cells have their front face drawn instead).
+            for (lat in -latMax..latMax) {
+                val latLeft = lat - 0.5f
+                val latRight = lat + 0.5f
+                if (maxOf(latLeft, -fovHalf) >= minOf(latRight, fovHalf)) continue
+                val visibleLatHalf = D * fovHalf / viewDistance
+                if (maxOf(latLeft, -visibleLatHalf) >= minOf(latRight, visibleLatHalf)) continue
+
+                val fCellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
+                val fCellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
+                if (tileMapManager.tileMap.cellTypeAt(fCellX, fCellY) == CellType.WALL) continue
+
+                val angleLeft = maxOf(latLeft / D, -frustumAngleHalf)
+                val angleRight = minOf(latRight / D, frustumAngleHalf)
+                if (angleLeft >= angleRight) continue
+                val subIntervals = subtractCoverage(angleLeft to angleRight, covered)
+                if (subIntervals.isEmpty()) continue
+
+                emitFloorCeiling(
+                    yTop = wallBottomY(D + 1), yBottom = wallBottomY(D),
+                    subIntervals = subIntervals,
+                    floorColor = floorBandColor(D), ceilColor = ceilingBandColor(D),
+                )
+            }
         }
 
         _frontWallCells.value = newFrontWallCells
         _sideWallCells.value = newSideWallCells
 
-        syncFrontWallActors(newWalls, viewW, viewH)
-        syncSideWallActors(newSideWalls, viewW, viewH)
+        return drawCommands
     }
 
-    // Diff-based actor lifecycle management for front walls.
-    //
-    // Compares the newly computed visibility set against the currently live actors:
-    // removes actors whose (lat, depth) slot is no longer visible, and creates actors
-    // for newly visible slots. Slots present in both sets are left untouched (no
-    // recreation cost when the player hasn't moved).
-    //
-    // Projection: at depth D each slot is viewW*viewDistance/(fovWidth*D) wide and
-    // viewH*wallHeightScale/D tall, centred at lat * slotWidth. Closer walls use a
-    // higher layerIndex (+1 offset keeps front walls above same-depth side walls).
-    private fun syncFrontWallActors(newWalls: Set<Pair<Int, Int>>, viewW: Float, viewH: Float) {
-        wallActors.keys.filter { it !in newWalls }
-            .forEach { key -> wallActors.remove(key)?.let { actorManager.remove(it) } }
-
-        newWalls.filter { it !in wallActors }.forEach { key ->
-            val (lat, dep) = key
-            val slotWidth = viewW * viewDistance / (fovWidth * dep)
-            val actor = FrontWallActor(
-                centerX = lat * slotWidth,
-                width = slotWidth,
-                height = viewH * wallHeightScale / dep,
-                depth = dep,
-                viewDistance = viewDistance,
-                renderMode = { renderMode },
-                layerIndex = (viewDistance - dep) * 2 + 1,
-                debugLabel = textMeasurer?.measure(
-                    "$lat,$dep",
-                    style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Yellow),
-                ),
-            )
-            wallActors[key] = actor
-            actorManager.add(actor)
-        }
+    // Warm stone colours for front walls: nearer cells are brighter (torchlight falloff).
+    private fun frontWallTexturedColor(depth: Int): Color {
+        val t = 1f - (depth - 1f) / (viewDistance - 1f).coerceAtLeast(1f)
+        return Color(red = 0.18f + 0.36f * t, green = 0.10f + 0.27f * t, blue = 0.05f + 0.17f * t)
     }
 
-    // Diff-based actor lifecycle management for side walls.
-    //
-    // Same diff pattern as syncFrontWallActors. Side wall geometry is a trapezoid:
-    //   xNear / yNearHalf — the party-side edge (wider, taller)
-    //   xFar  / yFarHalf  — the far edge (narrower, shorter)
-    // Both are derived from the perspective projection xB * viewW * viewDistance / (fovWidth * depth).
-    //
-    // Special cases:
-    //   depth=0: xNear formula diverges → clamp to ±viewW/2. yNearHalf is then derived from the
-    //     same perspective line as depth≥1 strips (y/|x| = constant) to avoid a visible bulge.
-    //   xNear overshoot: when xNear projects past ±viewW/2, clamp it and linearly interpolate
-    //     yNearHalf so the trapezoid meets the screen edge at the correct height.
-    private fun syncSideWallActors(newSideWalls: Set<Pair<Int, Int>>, viewW: Float, viewH: Float) {
-        sideWallActors.keys.filter { it !in newSideWalls }
-            .forEach { key -> sideWallActors.remove(key)?.let { actorManager.remove(it) } }
+    // Side walls are darker (face away from the imagined torch carried by the party).
+    private fun sideWallTexturedColor(depth: Int): Color {
+        val t = 1f - depth.toFloat() / viewDistance.toFloat()
+        return Color(
+            red = (0.18f + 0.36f * t) * 0.65f,
+            green = (0.10f + 0.27f * t) * 0.65f,
+            blue = (0.05f + 0.17f * t) * 0.65f,
+        )
+    }
 
-        newSideWalls.filter { it !in sideWallActors }.forEach { key ->
-            val (k, depth) = key
-            val xB = k / 2f
-            val xNear = if (depth == 0) (if (xB > 0f) viewW / 2f else -viewW / 2f)
-                        else xB * viewW * viewDistance / (fovWidth * depth)
-            val xFar = xB * viewW * viewDistance / (fovWidth * (depth + 1))
-            val yFarHalf = viewH * wallHeightScale / (2f * (depth + 1))
-            // Perspective-line invariant: y/|x| is constant for depth≥1 edges. At depth=0 the
-            // x formula is clamped, so derive yNearHalf from the same line rather than viewH/2.
-            val yNearHalf = if (depth == 0) (viewW / 2f) * yFarHalf / kotlin.math.abs(xFar)
-                            else viewH * wallHeightScale / (2f * depth)
-            val clampedXNear = xNear.coerceIn(-viewW / 2f, viewW / 2f)
-            val clampedYNearHalf = if (clampedXNear == xNear || xFar == xNear) yNearHalf
-                else yNearHalf + (clampedXNear - xNear) / (xFar - xNear) * (yFarHalf - yNearHalf)
-            val actor = SideWallActor(
-                xNear = clampedXNear,
-                xFar = xFar,
-                yNearHalf = clampedYNearHalf,
-                yFarHalf = yFarHalf,
-                depth = depth,
-                viewDistance = viewDistance,
-                renderMode = { renderMode },
-                layerIndex = (viewDistance - depth) * 2,
-                debugLabel = textMeasurer?.measure(
-                    "$k,$depth",
-                    style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Cyan),
-                ),
-            )
-            sideWallActors[key] = actor
-            actorManager.add(actor)
-        }
+    // Floor: warm dark stone, slightly brighter closer to the viewer.
+    private fun floorBandColor(depth: Int): Color {
+        val t = 1f - depth.toFloat() / (viewDistance + 1f)
+        return Color(red = 0.08f + 0.10f * t, green = 0.05f + 0.07f * t, blue = 0.02f + 0.03f * t)
+    }
+
+    // Ceiling: cooler and darker than the floor (less direct torchlight reaches the vault).
+    private fun ceilingBandColor(depth: Int): Color {
+        val t = 1f - depth.toFloat() / (viewDistance + 1f)
+        return Color(red = 0.05f + 0.06f * t, green = 0.03f + 0.04f * t, blue = 0.01f + 0.03f * t)
     }
 
     // Angular interval subtraction — the read side of the occlusion buffer.
     //
     // Returns the sub-intervals of [interval] not yet covered by any entry in [covered].
-    // An empty result means the interval is fully occluded; a non-empty result means at least
-    // part of it is still visible. The caller only needs to know whether the result is empty
-    // or not — the actual sub-intervals are not used further.
+    // An empty result means the interval is fully occluded. Non-empty sub-intervals are used
+    // directly to clip wall strip geometry to only the visible angular range.
     private fun subtractCoverage(
         interval: Pair<Float, Float>,
         covered: List<Pair<Float, Float>>,
