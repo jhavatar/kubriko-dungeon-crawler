@@ -17,8 +17,9 @@ import com.pandulapeter.kubriko.manager.ViewportManager
 class DungeonRendererManager(
     // The entity whose position and facing drive the first-person view.
     private val viewer: GridPosition,
-    // Number of lateral cell slots across the frustum at viewDistance. Odd values give a
-    // centre slot; even values split symmetrically. Controls how wide the corridor view is.
+    // Controls the angular width of the frustum in cell-widths (fovHalf = fovWidth / 2).
+    // Odd values: exactly fovWidth equal-width columns. Even values: (fovWidth - 1) full
+    // columns plus two half-width edge columns; total angular coverage is still ±fovHalf.
     val fovWidth: Int = 5,
     // How many cells forward the frustum extends. Walls beyond this distance are not rendered.
     val viewDistance: Int = 4,
@@ -26,7 +27,7 @@ class DungeonRendererManager(
     // Values below 1 leave floor and ceiling strips visible; 1.0 fills the full viewport.
     val wallHeightScale: Float = 0.8f,
     // Switches between solid-colour textured rendering and wireframe outline rendering.
-    var renderMode: RenderMode = RenderMode.TEXTURED,
+    renderMode: RenderMode = RenderMode.TEXTURED,
     // When non-null, enables debug labels drawn on each wall strip showing its (lat,depth) or
     // (k,depth) slot coordinates.
     private val textMeasurer: TextMeasurer? = null,
@@ -47,6 +48,9 @@ class DungeonRendererManager(
     private var lastFacing: Facing? = null
     private var lastViewW: Float = 0f
     private var lastViewH: Float = 0f
+    private var lastRenderMode: RenderMode? = null
+    var renderMode: RenderMode = renderMode
+        set(value) { field = value; lastRenderMode = null }
 
     private val fovHalf = fovWidth / 2f
 
@@ -66,7 +70,8 @@ class DungeonRendererManager(
 
         val viewChanged = viewW != lastViewW || viewH != lastViewH
         val positionChanged = viewer.cellX != lastCellX || viewer.cellY != lastCellY || viewer.facing != lastFacing
-        if (!positionChanged && !viewChanged) return
+        val modeChanged = renderMode != lastRenderMode
+        if (!positionChanged && !viewChanged && !modeChanged) return
 
         if (viewChanged || dungeonViewActor == null) {
             dungeonViewActor?.let { actorManager.remove(it) }
@@ -80,6 +85,7 @@ class DungeonRendererManager(
         lastFacing = viewer.facing
         lastViewW = viewW
         lastViewH = viewH
+        lastRenderMode = renderMode
         log("onUpdate")
         dungeonViewActor?.drawCommands = updateWalls(viewW, viewH)
     }
@@ -211,7 +217,10 @@ class DungeonRendererManager(
         //   • Per slot (lat, D) after step 3 of depth D: only open cells, angular-occlusion culled.
         //   Beyond viewDistance nothing is drawn — the viewport background (black) provides the cutoff.
         // ---------------------------------------------------------------------------------
-        fun wallBottomY(d: Int): Float = viewH / 2f + wallHeightScale * viewH / (2f * d)
+        fun wallBottomY(d: Int): Float {
+            require(d > 0) { "wallBottomY: d must be > 0, got $d" }
+            return viewH / 2f + wallHeightScale * viewH / (2f * d)
+        }
 
         fun emitFloorCeiling(
             yTop: Float,
@@ -289,24 +298,16 @@ class DungeonRendererManager(
                 // Angular occlusion check: the strip spans angles from xB/D (far end, smaller
                 // angle) to xB/sideDepth (near end, larger angle). For negative xB the signs
                 // flip but minOf/maxOf handles both sides symmetrically.
-                // sideDepth=0 is skipped to avoid dividing by zero; covered is still empty at
-                // that point so the check would always pass anyway.
-                // Angular extent of this strip. For sideDepth=0 the near end extends to the
-                // screen edge (÷0 avoided by clamping to ±frustumAngleHalf directly).
+                // For sideDepth=0 the near end extends to the screen edge (÷0 avoided by
+                // clamping nearAngle to ±frustumAngleHalf directly).
                 val nearAngle = if (sideDepth == 0) (if (xB > 0f) frustumAngleHalf else -frustumAngleHalf)
                                 else xB / sideDepth
                 val sideAngleMin = minOf(xB / D, nearAngle).coerceAtLeast(-frustumAngleHalf)
                 val sideAngleMax = maxOf(xB / D, nearAngle).coerceAtMost(frustumAngleHalf)
 
-                val subIntervals: List<Pair<Float, Float>>
-                if (sideDepth > 0) {
-                    if (sideAngleMin >= sideAngleMax) continue
-                    val remaining = subtractCoverage(sideAngleMin to sideAngleMax, covered)
-                    if (remaining.isEmpty()) continue
-                    subIntervals = remaining
-                } else {
-                    subIntervals = emptyList()
-                }
+                if (sideAngleMin >= sideAngleMax) continue
+                val subIntervals = subtractCoverage(sideAngleMin to sideAngleMax, covered)
+                if (subIntervals.isEmpty()) continue
 
                 // Trapezoid geometry (same projection as the old syncSideWallActors).
                 val yFarHalf = viewH * wallHeightScale / (2f * D)
@@ -329,42 +330,24 @@ class DungeonRendererManager(
                 val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
                 newSideWallCells[wCellX to wCellY] = "$k,$sideDepth"
 
-                if (sideDepth == 0) {
-                    // No coverage check at depth=0; clip to the full trapezoid x-extent.
+                // One strip per visible sub-interval; debug label on the first only.
+                subIntervals.forEachIndexed { idx, (subA, subB) ->
                     drawCommands.add(DrawCommand.SideStrip(
                         xNear = xNear_ds, xFar = xFar_ds,
                         yNearTop = yNearTop_ds, yNearBot = yNearBot_ds,
                         yFarTop = yFarTop_ds, yFarBot = yFarBot_ds,
-                        xClipLeft = minOf(xNear_ds, xFar_ds),
-                        xClipRight = maxOf(xNear_ds, xFar_ds),
+                        xClipLeft = subA.toDsX(),
+                        xClipRight = subB.toDsX(),
                         color = color,
-                        debugLabel = textMeasurer?.measure(
+                        debugLabel = if (idx == 0) textMeasurer?.measure(
                             "$k,$sideDepth",
                             style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Cyan),
-                        ),
+                        ) else null,
                     ))
-                } else {
-                    // One strip per visible sub-interval; debug label on the first only.
-                    subIntervals.forEachIndexed { idx, (subA, subB) ->
-                        drawCommands.add(DrawCommand.SideStrip(
-                            xNear = xNear_ds, xFar = xFar_ds,
-                            yNearTop = yNearTop_ds, yNearBot = yNearBot_ds,
-                            yFarTop = yFarTop_ds, yFarBot = yFarBot_ds,
-                            xClipLeft = subA.toDsX(),
-                            xClipRight = subB.toDsX(),
-                            color = color,
-                            debugLabel = if (idx == 0) textMeasurer?.measure(
-                                "$k,$sideDepth",
-                                style = TextStyle(fontSize = 12.sp, color = androidx.compose.ui.graphics.Color.Cyan),
-                            ) else null,
-                        ))
-                    }
                 }
                 // Side walls are solid surfaces — mark their angular range covered so
                 // deeper features in the same angular interval are correctly occluded.
-                // Applies to sideDepth=0 too: the depth-0 cell that spawned the wall is never
-                // processed by step 3 (which only covers depth-D cells), so its angular range
-                // would otherwise remain uncovered.
+                // sideDepth=0 walls are included: step 3 only processes depth-D cells.
                 mergeInto(covered, sideAngleMin to sideAngleMax)
             }
 

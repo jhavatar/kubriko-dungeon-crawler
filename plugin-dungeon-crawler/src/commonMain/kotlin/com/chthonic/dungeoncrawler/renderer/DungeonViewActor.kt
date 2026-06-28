@@ -70,6 +70,8 @@ class DungeonViewActor(
         // Only draw a vertical border when the sub-interval boundary coincides with the
         // actual wall geometry edge — i.e. that side is not clipped by occlusion.
         // Occlusion seam edges get no border so the wall doesn't look artificially small.
+        // Exact float equality is intentional: both values originate from the same
+        // toDsX() call in DungeonRendererManager when the sub-interval is unoccluded.
         val leftIsEdge = cmd.xLeft == cmd.xWallLeft
         val rightIsEdge = cmd.xRight == cmd.xWallRight
         when (mode) {

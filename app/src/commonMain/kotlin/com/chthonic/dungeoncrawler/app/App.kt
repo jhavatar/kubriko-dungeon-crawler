@@ -72,6 +72,7 @@ fun DungeonCrawlerApp() {
     val textMeasurer = rememberTextMeasurer()
     val dungeonRenderer = remember {
         DungeonRendererManager(
+            fovWidth = 5,
             viewer = viewer,
             textMeasurer = textMeasurer,
             isLoggingEnabled = true
