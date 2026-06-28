@@ -12,6 +12,7 @@ import com.pandulapeter.kubriko.manager.ViewportManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.time.measureTime
 
 class DungeonRendererManager(
     // The entity whose position and facing drive the first-person view.
@@ -51,17 +52,21 @@ class DungeonRendererManager(
     private var lastViewH: Float = 0f
     private var lastRenderMode: RenderMode? = null
     var renderMode: RenderMode = renderMode
-        set(value) { field = value; lastRenderMode = null }
+        set(value) {
+            field = value; lastRenderMode = null
+        }
 
     private val fovHalf = fovWidth / 2f
     private val frustumAngleHalf = fovHalf / viewDistance
 
     // Reusable frame buffers — cleared and refilled each update, never reallocated.
-    private val drawCommandsBuffer      = mutableListOf<DrawCommand>()
+    private val drawCommandsBuffer = mutableListOf<DrawCommand>()
     private val newFrontWallCellsBuffer = mutableMapOf<Pair<Int, Int>, String>()
-    private val newSideWallCellsBuffer  = mutableMapOf<Pair<Int, Int>, String>()
+    private val newSideWallCellsBuffer = mutableMapOf<Pair<Int, Int>, String>()
+
     // Angular occlusion buffer tracking which frustum sub-intervals are covered by solid walls.
     private val occlusionBuffer = AngularOcclusionBuffer(-frustumAngleHalf, frustumAngleHalf)
+
     // Local copy of the logging flag: Manager exposes no protected accessor, so we store it
     // here to guard hot-path log calls and prevent string interpolation when logging is off.
     private val debugLogging = isLoggingEnabled
@@ -81,7 +86,8 @@ class DungeonRendererManager(
         if (viewW == 0f || viewH == 0f) return
 
         val viewChanged = viewW != lastViewW || viewH != lastViewH
-        val positionChanged = viewer.cellX != lastCellX || viewer.cellY != lastCellY || viewer.facing != lastFacing
+        val positionChanged =
+            viewer.cellX != lastCellX || viewer.cellY != lastCellY || viewer.facing != lastFacing
         val modeChanged = renderMode != lastRenderMode
         if (!positionChanged && !viewChanged && !modeChanged) return
 
@@ -99,7 +105,13 @@ class DungeonRendererManager(
         lastViewH = viewH
         lastRenderMode = renderMode
         if (debugLogging) log("onUpdate")
-        checkNotNull(dungeonViewActor).update(updateWalls(viewW, viewH))
+        val buildDrawCommandsElapsed = measureTime {
+            checkNotNull(dungeonViewActor).update(buildDrawCommands(viewW, viewH))
+        }
+        log(
+            "onUpdate",
+            "render ${buildDrawCommandsElapsed.inWholeMicroseconds}µs, ${drawCommandsBuffer.size} cmds"
+        )
     }
 
     // Front-to-back angular occlusion traversal.
@@ -197,8 +209,8 @@ class DungeonRendererManager(
     //
     //   Total: O(D × W × n) = O(D × W²).
     //   For typical blobber values (D=4, W=5): ≈100 iterations per frame — effectively O(1).
-    private fun updateWalls(viewW: Float, viewH: Float): List<DrawCommand> {
-        if (debugLogging) log("updateWalls")
+    private fun buildDrawCommands(viewW: Float, viewH: Float): List<DrawCommand> {
+        if (debugLogging) log("buildDrawCommands")
         val tileMap = tileMapManager.tileMap
         val right = viewer.facing.turnedRight()
         val latMax = fovHalf.toInt()
@@ -233,10 +245,13 @@ class DungeonRendererManager(
 
         // Near band: floor/ceiling of viewer's own cell — always full frustum width.
         emitFloorCeiling(
-            angleToX = angleToX, viewW = viewW,
-            yTop = wallBottomY(1), yBottom = viewH,
+            angleToX = angleToX,
+            viewW = viewW,
+            yTop = wallBottomY(1),
+            yBottom = viewH,
             subIntervals = listOf(Interval(-frustumAngleHalf, frustumAngleHalf)),
-            floorColor = colorTheme.floorColor(0, viewDistance), ceilColor = colorTheme.ceilColor(0, viewDistance),
+            floorColor = colorTheme.floorColor(0, viewDistance),
+            ceilColor = colorTheme.ceilColor(0, viewDistance),
         )
 
         for (D in 1..viewDistance) {
@@ -270,8 +285,10 @@ class DungeonRendererManager(
                 val wallLat = if (leftIsWall) leftLat else rightLat
                 if (wallLat != 0) {
                     val inwardLat = wallLat - if (wallLat > 0) 1 else -1
-                    val inwardCellX = viewer.cellX + sideDepth * viewer.facing.dx + inwardLat * right.dx
-                    val inwardCellY = viewer.cellY + sideDepth * viewer.facing.dy + inwardLat * right.dy
+                    val inwardCellX =
+                        viewer.cellX + sideDepth * viewer.facing.dx + inwardLat * right.dx
+                    val inwardCellY =
+                        viewer.cellY + sideDepth * viewer.facing.dy + inwardLat * right.dy
                     if (tileMap.cellTypeAt(inwardCellX, inwardCellY) == CellType.WALL) continue
                 }
 
@@ -279,7 +296,7 @@ class DungeonRendererManager(
                 // xNear is the screen-x of the near edge (party side); xFar is the far edge.
                 // At sideDepth=0 the formula diverges (division by zero), so clamp to screen edge.
                 val xNear = if (sideDepth == 0) (if (xB > 0f) viewW / 2f else -viewW / 2f)
-                            else xB * viewW * viewDistance / (fovWidth * sideDepth)
+                else xB * viewW * viewDistance / (fovWidth * sideDepth)
                 val xFar = xB * viewW * viewDistance / (fovWidth * D)
                 if (xNear == xFar) continue
                 // xFar is the edge closer to screen centre; if it's already outside ±viewW/2 the
@@ -291,8 +308,9 @@ class DungeonRendererManager(
                 // flip but minOf/maxOf handles both sides symmetrically.
                 // For sideDepth=0 the near end extends to the screen edge (÷0 avoided by
                 // clamping nearAngle to ±frustumAngleHalf directly).
-                val nearAngle = if (sideDepth == 0) (if (xB > 0f) frustumAngleHalf else -frustumAngleHalf)
-                                else xB / sideDepth
+                val nearAngle =
+                    if (sideDepth == 0) (if (xB > 0f) frustumAngleHalf else -frustumAngleHalf)
+                    else xB / sideDepth
                 val sideAngleMin = minOf(xB / D, nearAngle).coerceAtLeast(-frustumAngleHalf)
                 val sideAngleMax = maxOf(xB / D, nearAngle).coerceAtMost(frustumAngleHalf)
 
@@ -303,10 +321,10 @@ class DungeonRendererManager(
                 // Trapezoid geometry (same projection as the old syncSideWallActors).
                 val yFarHalf = viewH * wallHeightScale / (2f * D)
                 val yNearHalf = if (sideDepth == 0) (viewW / 2f) * yFarHalf / kotlin.math.abs(xFar)
-                               else viewH * wallHeightScale / (2f * sideDepth)
+                else viewH * wallHeightScale / (2f * sideDepth)
                 val clampedXNear = xNear.coerceIn(-viewW / 2f, viewW / 2f)
                 val clampedYNearHalf = if (clampedXNear == xNear || xFar == xNear) yNearHalf
-                    else yNearHalf + (clampedXNear - xNear) / (xFar - xNear) * (yFarHalf - yNearHalf)
+                else yNearHalf + (clampedXNear - xNear) / (xFar - xNear) * (yFarHalf - yNearHalf)
 
                 // Convert scene-space trapezoid to DrawScope space (origin = viewport top-left).
                 val xNear_ds = clampedXNear + viewW / 2f
@@ -317,21 +335,26 @@ class DungeonRendererManager(
                 val yFarBot_ds = viewH / 2f + yFarHalf
                 val color = colorTheme.sideWallColor(sideDepth, viewDistance)
 
-                if (debugLogging) log("updateWalls", "add side wall $wallLat, $sideDepth")
+                if (debugLogging) log("buildDrawCommands", "add side wall $wallLat, $sideDepth")
                 val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
                 newSideWallCellsBuffer[wCellX to wCellY] = "$k,$sideDepth"
 
                 // One strip per visible sub-interval; debug label on the first only.
                 subIntervals.forEachIndexed { idx, (lo, hi) ->
-                    drawCommandsBuffer.add(DrawCommand.SideStrip(
-                        xNear = xNear_ds, xFar = xFar_ds,
-                        yNearTop = yNearTop_ds, yNearBot = yNearBot_ds,
-                        yFarTop = yFarTop_ds, yFarBot = yFarBot_ds,
-                        xClipLeft = lo.toDsX(),
-                        xClipRight = hi.toDsX(),
-                        color = color,
-                        debugLabel = if (idx == 0) debugLabelProvider?.invoke("$k,$sideDepth", true) else null,
-                    ))
+                    drawCommandsBuffer.add(
+                        DrawCommand.SideStrip(
+                            xNear = xNear_ds, xFar = xFar_ds,
+                            yNearTop = yNearTop_ds, yNearBot = yNearBot_ds,
+                            yFarTop = yFarTop_ds, yFarBot = yFarBot_ds,
+                            xClipLeft = lo.toDsX(),
+                            xClipRight = hi.toDsX(),
+                            color = color,
+                            debugLabel = if (idx == 0) debugLabelProvider?.invoke(
+                                "$k,$sideDepth",
+                                true
+                            ) else null,
+                        )
+                    )
                 }
                 // Side walls are solid surfaces — mark their angular range covered so
                 // deeper features in the same angular interval are correctly occluded.
@@ -369,7 +392,7 @@ class DungeonRendererManager(
                 val prevCellX = viewer.cellX + (D - 1) * viewer.facing.dx + lat * right.dx
                 val prevCellY = viewer.cellY + (D - 1) * viewer.facing.dy + lat * right.dy
                 if (tileMap.cellTypeAt(prevCellX, prevCellY) != CellType.WALL) {
-                    if (debugLogging) log("updateWalls", "add front wall $lat, $D")
+                    if (debugLogging) log("buildDrawCommands", "add front wall $lat, $D")
                     newFrontWallCellsBuffer[cellX to cellY] = "$lat,$D"
 
                     val slotHeight = viewH * wallHeightScale / D
@@ -380,16 +403,21 @@ class DungeonRendererManager(
                     val xWallLeft_ds = angleLeft.toDsX()
                     val xWallRight_ds = angleRight.toDsX()
                     subIntervals.forEachIndexed { idx, (lo, hi) ->
-                        drawCommandsBuffer.add(DrawCommand.FrontStrip(
-                            xLeft = lo.toDsX(),
-                            xRight = hi.toDsX(),
-                            yTop = yTop,
-                            yBottom = yBottom,
-                            color = color,
-                            xWallLeft = xWallLeft_ds,
-                            xWallRight = xWallRight_ds,
-                            debugLabel = if (idx == 0) debugLabelProvider?.invoke("$lat,$D", false) else null,
-                        ))
+                        drawCommandsBuffer.add(
+                            DrawCommand.FrontStrip(
+                                xLeft = lo.toDsX(),
+                                xRight = hi.toDsX(),
+                                yTop = yTop,
+                                yBottom = yBottom,
+                                color = color,
+                                xWallLeft = xWallLeft_ds,
+                                xWallRight = xWallRight_ds,
+                                debugLabel = if (idx == 0) debugLabelProvider?.invoke(
+                                    "$lat,$D",
+                                    false
+                                ) else null,
+                            )
+                        )
                     }
                 }
             }
@@ -431,10 +459,13 @@ class DungeonRendererManager(
                 if (subIntervals.isEmpty()) continue
 
                 emitFloorCeiling(
-                    angleToX = angleToX, viewW = viewW,
-                    yTop = wallBottomY(D + 1), yBottom = wallBottomY(D),
+                    angleToX = angleToX,
+                    viewW = viewW,
+                    yTop = wallBottomY(D + 1),
+                    yBottom = wallBottomY(D),
                     subIntervals = subIntervals,
-                    floorColor = colorTheme.floorColor(D, viewDistance), ceilColor = colorTheme.ceilColor(D, viewDistance),
+                    floorColor = colorTheme.floorColor(D, viewDistance),
+                    ceilColor = colorTheme.ceilColor(D, viewDistance),
                 )
             }
 
@@ -443,8 +474,10 @@ class DungeonRendererManager(
             if (occlusionBuffer.isFull) break
         }
 
-        if (newFrontWallCellsBuffer != _frontWallCells.value) _frontWallCells.value = newFrontWallCellsBuffer.toMap()
-        if (newSideWallCellsBuffer != _sideWallCells.value) _sideWallCells.value = newSideWallCellsBuffer.toMap()
+        if (newFrontWallCellsBuffer != _frontWallCells.value) _frontWallCells.value =
+            newFrontWallCellsBuffer.toMap()
+        if (newSideWallCellsBuffer != _sideWallCells.value) _sideWallCells.value =
+            newSideWallCellsBuffer.toMap()
 
         return drawCommandsBuffer
     }
@@ -461,8 +494,8 @@ class DungeonRendererManager(
     }
 
     // Emits floor and ceiling bands for each visible angular sub-interval of a cell slot.
-    // angleToX and viewW are passed from updateWalls so the method does not need the local
-    // toDsX extension (which is only in scope inside updateWalls).
+    // angleToX and viewW are passed from buildDrawCommands so the method does not need the local
+    // toDsX extension (which is only in scope inside buildDrawCommands).
     private fun emitFloorCeiling(
         angleToX: Float,
         viewW: Float,
@@ -473,14 +506,16 @@ class DungeonRendererManager(
         ceilColor: Color,
     ) {
         for ((lo, hi) in subIntervals) {
-            drawCommandsBuffer.add(DrawCommand.FloorCeilingBand(
-                yFloorClipTop = yTop,
-                yFloorClipBottom = yBottom,
-                xClipLeft = lo * angleToX + viewW / 2f,
-                xClipRight = hi * angleToX + viewW / 2f,
-                floorColor = floorColor,
-                ceilColor = ceilColor,
-            ))
+            drawCommandsBuffer.add(
+                DrawCommand.FloorCeilingBand(
+                    yFloorClipTop = yTop,
+                    yFloorClipBottom = yBottom,
+                    xClipLeft = lo * angleToX + viewW / 2f,
+                    xClipRight = hi * angleToX + viewW / 2f,
+                    floorColor = floorColor,
+                    ceilColor = ceilColor,
+                )
+            )
         }
     }
 
