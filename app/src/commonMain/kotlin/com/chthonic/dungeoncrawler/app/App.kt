@@ -20,7 +20,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.chthonic.dungeoncrawler.renderer.DungeonAtlas
 import com.chthonic.dungeoncrawler.renderer.DungeonRendererManager
+import com.chthonic.dungeoncrawler.renderer.RenderMode
+import kubriko_dungeon_crawler.app.generated.resources.Res
+import kubriko_dungeon_crawler.app.generated.resources.dungeon_atlas
+import org.jetbrains.compose.resources.imageResource
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.Mob
 import com.chthonic.dungeoncrawler.tilemap.TileMap
@@ -73,6 +78,7 @@ fun DungeonCrawlerApp() {
             isLoggingEnabled = true,
         )
     }
+    val atlasImage = imageResource(Res.drawable.dungeon_atlas)
     val textMeasurer = rememberTextMeasurer()
     val dungeonRenderer = remember {
         // Two caches — one per colour — so the same label text used for both a side wall
@@ -82,6 +88,8 @@ fun DungeonCrawlerApp() {
         DungeonRendererManager(
             fovWidth = 5,
             viewer = viewer,
+            renderMode = RenderMode.TEXTURED,
+            atlas = DungeonAtlas(image = atlasImage, tileSize = 128, cols = 2, frontWallTile = 2, sideWallTile = 2, floorTile = 1),
             debugLabelProvider = { text, isSideWall ->
                 (if (isSideWall) sideCache else frontCache).getOrPut(text) {
                     textMeasurer.measure(

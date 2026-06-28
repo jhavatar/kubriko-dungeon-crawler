@@ -26,10 +26,12 @@ class DungeonRendererManager(
     // Fraction of the viewport height that a wall at depth=1 occupies (0 < scale ≤ 1).
     // Values below 1 leave floor and ceiling strips visible; 1.0 fills the full viewport.
     val wallHeightScale: Float = 0.8f,
-    // Switches between solid-colour textured rendering and wireframe outline rendering.
-    renderMode: RenderMode = RenderMode.TEXTURED,
+    // Switches between solid-colour, atlas-textured, and wireframe rendering.
+    renderMode: RenderMode = RenderMode.SOLID,
     // Colour palette for walls, floor, and ceiling. Provide a custom instance to re-theme.
     val colorTheme: DungeonColorTheme = DungeonColorTheme(),
+    // Texture atlas for RenderMode.TEXTURED. Without one, TEXTURED falls back to SOLID.
+    private val atlas: DungeonAtlas? = null,
     // When non-null, called once per wall strip to produce a debug label overlay.
     // Receives the label text and true for a side wall / false for a front wall.
     private val debugLabelProvider: ((text: String, isSideWall: Boolean) -> TextLayoutResult?)? = null,
@@ -93,7 +95,7 @@ class DungeonRendererManager(
 
         if (viewChanged || dungeonViewActor == null) {
             dungeonViewActor?.let { actorManager.remove(it) }
-            val actor = DungeonViewActor(viewW, viewH, renderMode = { renderMode })
+            val actor = DungeonViewActor(viewW, viewH, renderMode = { renderMode }, atlas = atlas)
             dungeonViewActor = actor
             actorManager.add(actor)
         }
@@ -217,6 +219,10 @@ class DungeonRendererManager(
         newFrontWallCellsBuffer.clear()
         newSideWallCellsBuffer.clear()
         drawCommandsBuffer.clear()
+        val frontWallTile = atlas?.frontWallTile ?: 0
+        val sideWallTile  = atlas?.sideWallTile  ?: 0
+        val floorTile     = atlas?.floorTile      ?: 0
+        val ceilTile      = atlas?.ceilTile       ?: 0
 
         occlusionBuffer.clear()
 
@@ -252,6 +258,8 @@ class DungeonRendererManager(
             subIntervals = listOf(Interval(-frustumAngleHalf, frustumAngleHalf)),
             floorColor = colorTheme.floorColor(0, viewDistance),
             ceilColor = colorTheme.ceilColor(0, viewDistance),
+            floorTileIndex = floorTile,
+            ceilTileIndex = ceilTile,
         )
 
         for (D in 1..viewDistance) {
@@ -349,6 +357,10 @@ class DungeonRendererManager(
                             xClipLeft = lo.toDsX(),
                             xClipRight = hi.toDsX(),
                             color = color,
+                            tileIndex = sideWallTile,
+                            shadeFactor = colorTheme.sideWallShadow,
+                            zNear = maxOf(sideDepth, 1).toFloat(),
+                            zFar = D.toFloat(),
                             debugLabel = if (idx == 0) debugLabelProvider?.invoke(
                                 "$k,$sideDepth",
                                 true
@@ -400,13 +412,17 @@ class DungeonRendererManager(
                     val yBottom = viewH / 2f + slotHeight / 2f
                     val color = colorTheme.frontWallColor(D, viewDistance)
 
-                    val xWallLeft_ds = angleLeft.toDsX()
-                    val xWallRight_ds = angleRight.toDsX()
+                    // Use the full (unclipped) cell angular extent so that UV sampling in
+                    // drawFrontStrip spans the correct slice of the tile even when the frustum
+                    // clips one edge of the cell (e.g. lat=±latMax at D < viewDistance).
+                    val xWallLeft_ds  = (latLeft  / D).toDsX()
+                    val xWallRight_ds = (latRight / D).toDsX()
                     subIntervals.forEachIndexed { idx, (lo, hi) ->
                         drawCommandsBuffer.add(
                             DrawCommand.FrontStrip(
                                 xLeft = lo.toDsX(),
                                 xRight = hi.toDsX(),
+                                tileIndex = frontWallTile,
                                 yTop = yTop,
                                 yBottom = yBottom,
                                 color = color,
@@ -466,6 +482,8 @@ class DungeonRendererManager(
                     subIntervals = subIntervals,
                     floorColor = colorTheme.floorColor(D, viewDistance),
                     ceilColor = colorTheme.ceilColor(D, viewDistance),
+                    floorTileIndex = floorTile,
+                    ceilTileIndex = ceilTile,
                 )
             }
 
@@ -504,6 +522,8 @@ class DungeonRendererManager(
         subIntervals: List<Interval>,
         floorColor: Color,
         ceilColor: Color,
+        floorTileIndex: Int = 0,
+        ceilTileIndex: Int = 0,
     ) {
         for ((lo, hi) in subIntervals) {
             drawCommandsBuffer.add(
@@ -514,6 +534,8 @@ class DungeonRendererManager(
                     xClipRight = hi * angleToX + viewW / 2f,
                     floorColor = floorColor,
                     ceilColor = ceilColor,
+                    floorTileIndex = floorTileIndex,
+                    ceilTileIndex = ceilTileIndex,
                 )
             )
         }

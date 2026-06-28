@@ -1,0 +1,5 @@
+# Atlas: dungeon_atlas.png  tile_size=128x128  cols=2  rows=2
+# index  name
+  0  EOB2FT01
+  1  EOBFLT11
+  2  MEWL1

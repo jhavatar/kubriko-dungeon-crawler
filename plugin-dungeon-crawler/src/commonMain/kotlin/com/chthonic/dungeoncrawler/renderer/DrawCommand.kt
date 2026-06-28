@@ -29,6 +29,8 @@ sealed class DrawCommand {
         val xClipRight: Float,       // right DrawScope x bound (angular sub-interval end)
         val floorColor: Color,
         val ceilColor: Color,
+        val floorTileIndex: Int = 0,
+        val ceilTileIndex: Int = 0,
     ) : DrawCommand()
 
     // A visible sub-interval strip of a front-facing wall.
@@ -44,6 +46,7 @@ sealed class DrawCommand {
         // cell-geometry edge borders from occlusion-seam clip edges (no border at seam).
         val xWallLeft: Float,
         val xWallRight: Float,
+        val tileIndex: Int = 0,
         val debugLabel: TextLayoutResult? = null,
     ) : DrawCommand()
 
@@ -60,6 +63,11 @@ sealed class DrawCommand {
         val xClipLeft: Float,
         val xClipRight: Float,
         val color: Color,
+        val tileIndex: Int = 0,
+        val shadeFactor: Float = 1f,
+        // Depths in scene units — used by TEXTURED mode for perspective-correct UV interpolation.
+        val zNear: Float = 1f,
+        val zFar: Float = 2f,
         val debugLabel: TextLayoutResult? = null,
     ) : DrawCommand()
 }
