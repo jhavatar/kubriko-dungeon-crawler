@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
@@ -74,17 +75,23 @@ fun DungeonCrawlerApp() {
     }
     val textMeasurer = rememberTextMeasurer()
     val dungeonRenderer = remember {
+        // Two caches — one per colour — so the same label text used for both a side wall
+        // (cyan) and a front wall (yellow) never resolves to the wrong TextLayoutResult.
+        val sideCache  = mutableMapOf<String, TextLayoutResult>()
+        val frontCache = mutableMapOf<String, TextLayoutResult>()
         DungeonRendererManager(
             fovWidth = 5,
             viewer = viewer,
             debugLabelProvider = { text, isSideWall ->
-                textMeasurer.measure(
-                    text,
-                    style = TextStyle(
-                        fontSize = 12.sp,
-                        color = if (isSideWall) Color.Cyan else Color.Yellow,
-                    ),
-                )
+                (if (isSideWall) sideCache else frontCache).getOrPut(text) {
+                    textMeasurer.measure(
+                        text,
+                        style = TextStyle(
+                            fontSize = 12.sp,
+                            color = if (isSideWall) Color.Cyan else Color.Yellow,
+                        ),
+                    )
+                }
             },
             isLoggingEnabled = true
         )

@@ -61,6 +61,9 @@ class DungeonRendererManager(
     private val newSideWallCellsBuffer  = mutableMapOf<Pair<Int, Int>, String>()
     // Angular occlusion buffer tracking which frustum sub-intervals are covered by solid walls.
     private val occlusionBuffer = AngularOcclusionBuffer()
+    // Local copy of the logging flag: Manager exposes no protected accessor, so we store it
+    // here to guard hot-path log calls and prevent string interpolation when logging is off.
+    private val debugLogging = isLoggingEnabled
 
     // Map from (mapCellX, mapCellY) → debug label for each visible front wall cell.
     // Coordinates are resolved in map space at compute time so the minimap can use them directly.
@@ -94,7 +97,7 @@ class DungeonRendererManager(
         lastViewW = viewW
         lastViewH = viewH
         lastRenderMode = renderMode
-        log("onUpdate")
+        if (debugLogging) log("onUpdate")
         checkNotNull(dungeonViewActor).update(updateWalls(viewW, viewH))
     }
 
@@ -194,7 +197,7 @@ class DungeonRendererManager(
     //   Total: O(D × W × n) = O(D × W²).
     //   For typical blobber values (D=4, W=5): ≈100 iterations per frame — effectively O(1).
     private fun updateWalls(viewW: Float, viewH: Float): List<DrawCommand> {
-        log("updateWalls")
+        if (debugLogging) log("updateWalls")
         val tileMap = tileMapManager.tileMap
         val right = viewer.facing.turnedRight()
         val latMax = fovHalf.toInt()
@@ -316,7 +319,7 @@ class DungeonRendererManager(
                 val yFarBot_ds = viewH / 2f + yFarHalf
                 val color = colorTheme.sideWallColor(sideDepth, viewDistance)
 
-                log("updateWalls", "add side wall lat=$wallLat, depth=$sideDepth")
+                if (debugLogging) log("updateWalls", "add side wall $wallLat, $sideDepth")
                 val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
                 newSideWallCellsBuffer[wCellX to wCellY] = "$k,$sideDepth"
 
@@ -368,7 +371,7 @@ class DungeonRendererManager(
                 val prevCellX = viewer.cellX + (D - 1) * viewer.facing.dx + lat * right.dx
                 val prevCellY = viewer.cellY + (D - 1) * viewer.facing.dy + lat * right.dy
                 if (tileMap.cellTypeAt(prevCellX, prevCellY) != CellType.WALL) {
-                    log("updateWalls", "add front wall $lat, $D")
+                    if (debugLogging) log("updateWalls", "add front wall $lat, $D")
                     newFrontWallCellsBuffer[cellX to cellY] = "$lat,$D"
 
                     val slotHeight = viewH * wallHeightScale / D
