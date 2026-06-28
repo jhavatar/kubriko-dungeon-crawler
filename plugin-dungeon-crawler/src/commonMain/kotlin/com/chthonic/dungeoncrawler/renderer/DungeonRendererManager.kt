@@ -3,6 +3,7 @@ package com.chthonic.dungeoncrawler.renderer
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
@@ -53,6 +54,17 @@ class DungeonRendererManager(
         set(value) { field = value; lastRenderMode = null }
 
     private val fovHalf = fovWidth / 2f
+
+    // Reusable frame buffers — cleared and refilled each update, never reallocated.
+    private val drawCommandsBuffer      = mutableListOf<DrawCommand>()
+    private val newFrontWallCellsBuffer = mutableMapOf<Pair<Int, Int>, String>()
+    private val newSideWallCellsBuffer  = mutableMapOf<Pair<Int, Int>, String>()
+    // Scratch buffer for mergeInto — eliminates one MutableList allocation per merge call.
+    private val mergeScratch            = mutableListOf<Interval>()
+    // TextMeasurer results keyed by label text, one cache per colour to avoid collisions
+    // (the same text string can appear in both cyan side-wall and yellow front-wall labels).
+    private val frontLabelCache = mutableMapOf<String, TextLayoutResult>()
+    private val sideLabelCache  = mutableMapOf<String, TextLayoutResult>()
 
     // Map from (mapCellX, mapCellY) → debug label for each visible front wall cell.
     // Coordinates are resolved in map space at compute time so the minimap can use them directly.
@@ -190,20 +202,19 @@ class DungeonRendererManager(
         val tileMap = tileMapManager.tileMap
         val right = viewer.facing.turnedRight()
         val latMax = fovHalf.toInt()
-        val newFrontWallCells = mutableMapOf<Pair<Int, Int>, String>()
-        val newSideWallCells = mutableMapOf<Pair<Int, Int>, String>()
+        newFrontWallCellsBuffer.clear()
+        newSideWallCellsBuffer.clear()
+        drawCommandsBuffer.clear()
 
         // frustumAngleHalf is the maximum visible angle: a ray to the far corner of the outermost
         // slot (lat = ±fovHalf at depth = viewDistance) has angle ±fovHalf/viewDistance.
         val frustumAngleHalf = fovHalf / viewDistance
-        val covered = mutableListOf<Pair<Float, Float>>()
+        val covered = mutableListOf<Interval>()
 
         // Converts an angular position to a DrawScope x coordinate.
         // screen_x_scene = angle × viewW × viewDistance / fovWidth; +viewW/2 offsets to DrawScope.
         val angleToX = viewW * viewDistance.toFloat() / fovWidth.toFloat()
         fun Float.toDsX() = this * angleToX + viewW / 2f
-
-        val drawCommands = mutableListOf<DrawCommand>()
 
         // ---------------------------------------------------------------------------------
         // Floor and ceiling: emitted as per-(lat, depth) cell slots so each cell can
@@ -226,16 +237,16 @@ class DungeonRendererManager(
         fun emitFloorCeiling(
             yTop: Float,
             yBottom: Float,
-            subIntervals: List<Pair<Float, Float>>,
+            subIntervals: List<Interval>,
             floorColor: Color,
             ceilColor: Color,
         ) {
-            for ((αA, αB) in subIntervals) {
-                drawCommands.add(DrawCommand.FloorCeilingBand(
+            for ((lo, hi) in subIntervals) {
+                drawCommandsBuffer.add(DrawCommand.FloorCeilingBand(
                     yFloorClipTop = yTop,
                     yFloorClipBottom = yBottom,
-                    xClipLeft = αA.toDsX(),
-                    xClipRight = αB.toDsX(),
+                    xClipLeft = lo.toDsX(),
+                    xClipRight = hi.toDsX(),
                     floorColor = floorColor,
                     ceilColor = ceilColor,
                 ))
@@ -245,7 +256,7 @@ class DungeonRendererManager(
         // Near band: floor/ceiling of viewer's own cell — always full frustum width.
         emitFloorCeiling(
             yTop = wallBottomY(1), yBottom = viewH,
-            subIntervals = listOf(-frustumAngleHalf to frustumAngleHalf),
+            subIntervals = listOf(Interval(-frustumAngleHalf, frustumAngleHalf)),
             floorColor = floorBandColor(0), ceilColor = ceilingBandColor(0),
         )
 
@@ -307,7 +318,7 @@ class DungeonRendererManager(
                 val sideAngleMax = maxOf(xB / D, nearAngle).coerceAtMost(frustumAngleHalf)
 
                 if (sideAngleMin >= sideAngleMax) continue
-                val subIntervals = subtractCoverage(sideAngleMin to sideAngleMax, covered)
+                val subIntervals = subtractCoverage(Interval(sideAngleMin, sideAngleMax), covered)
                 if (subIntervals.isEmpty()) continue
 
                 // Trapezoid geometry (same projection as the old syncSideWallActors).
@@ -329,27 +340,24 @@ class DungeonRendererManager(
 
                 log("updateWalls", "add side wall lat=$wallLat, depth=$sideDepth")
                 val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
-                newSideWallCells[wCellX to wCellY] = "$k,$sideDepth"
+                newSideWallCellsBuffer[wCellX to wCellY] = "$k,$sideDepth"
 
                 // One strip per visible sub-interval; debug label on the first only.
-                subIntervals.forEachIndexed { idx, (subA, subB) ->
-                    drawCommands.add(DrawCommand.SideStrip(
+                subIntervals.forEachIndexed { idx, (lo, hi) ->
+                    drawCommandsBuffer.add(DrawCommand.SideStrip(
                         xNear = xNear_ds, xFar = xFar_ds,
                         yNearTop = yNearTop_ds, yNearBot = yNearBot_ds,
                         yFarTop = yFarTop_ds, yFarBot = yFarBot_ds,
-                        xClipLeft = subA.toDsX(),
-                        xClipRight = subB.toDsX(),
+                        xClipLeft = lo.toDsX(),
+                        xClipRight = hi.toDsX(),
                         color = color,
-                        debugLabel = if (idx == 0) textMeasurer?.measure(
-                            "$k,$sideDepth",
-                            style = TextStyle(fontSize = DEBUG_LABEL_SIZE, color = androidx.compose.ui.graphics.Color.Cyan),
-                        ) else null,
+                        debugLabel = if (idx == 0) sideLabel("$k,$sideDepth") else null,
                     ))
                 }
                 // Side walls are solid surfaces — mark their angular range covered so
                 // deeper features in the same angular interval are correctly occluded.
                 // sideDepth=0 walls are included: step 3 only processes depth-D cells.
-                mergeInto(covered, sideAngleMin to sideAngleMax)
+                mergeInto(covered, Interval(sideAngleMin, sideAngleMax))
             }
 
             // ---------------------------------------------------------------------------------
@@ -380,7 +388,7 @@ class DungeonRendererManager(
                 val angleLeft = maxOf(latLeft / D, -frustumAngleHalf)
                 val angleRight = minOf(latRight / D, frustumAngleHalf)
                 if (angleLeft >= angleRight) continue
-                val subIntervals = subtractCoverage(angleLeft to angleRight, covered)
+                val subIntervals = subtractCoverage(Interval(angleLeft, angleRight), covered)
                 if (subIntervals.isEmpty()) continue
 
                 // Open→wall transition: only emit the face if the cell at depth D-1 is open.
@@ -389,7 +397,7 @@ class DungeonRendererManager(
                 val prevCellY = viewer.cellY + (D - 1) * viewer.facing.dy + lat * right.dy
                 if (tileMap.cellTypeAt(prevCellX, prevCellY) != CellType.WALL) {
                     log("updateWalls", "add front wall $lat, $D")
-                    newFrontWallCells[cellX to cellY] = "$lat,$D"
+                    newFrontWallCellsBuffer[cellX to cellY] = "$lat,$D"
 
                     val slotHeight = viewH * wallHeightScale / D
                     val yTop = viewH / 2f - slotHeight / 2f
@@ -398,19 +406,16 @@ class DungeonRendererManager(
 
                     val xWallLeft_ds = angleLeft.toDsX()
                     val xWallRight_ds = angleRight.toDsX()
-                    subIntervals.forEachIndexed { idx, (subA, subB) ->
-                        drawCommands.add(DrawCommand.FrontStrip(
-                            xLeft = subA.toDsX(),
-                            xRight = subB.toDsX(),
+                    subIntervals.forEachIndexed { idx, (lo, hi) ->
+                        drawCommandsBuffer.add(DrawCommand.FrontStrip(
+                            xLeft = lo.toDsX(),
+                            xRight = hi.toDsX(),
                             yTop = yTop,
                             yBottom = yBottom,
                             color = color,
                             xWallLeft = xWallLeft_ds,
                             xWallRight = xWallRight_ds,
-                            debugLabel = if (idx == 0) textMeasurer?.measure(
-                                "$lat,$D",
-                                style = TextStyle(fontSize = DEBUG_LABEL_SIZE, color = androidx.compose.ui.graphics.Color.Yellow),
-                            ) else null,
+                            debugLabel = if (idx == 0) frontLabel("$lat,$D") else null,
                         ))
                     }
                 }
@@ -430,7 +435,7 @@ class DungeonRendererManager(
                 val cellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
                 val cellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
                 if (tileMap.cellTypeAt(cellX, cellY) == CellType.WALL) {
-                    mergeInto(covered, angleLeft to angleRight)
+                    mergeInto(covered, Interval(angleLeft, angleRight))
                 }
             }
 
@@ -451,7 +456,7 @@ class DungeonRendererManager(
                 val angleLeft = maxOf(latLeft / D, -frustumAngleHalf)
                 val angleRight = minOf(latRight / D, frustumAngleHalf)
                 if (angleLeft >= angleRight) continue
-                val subIntervals = subtractCoverage(angleLeft to angleRight, covered)
+                val subIntervals = subtractCoverage(Interval(angleLeft, angleRight), covered)
                 if (subIntervals.isEmpty()) continue
 
                 emitFloorCeiling(
@@ -462,10 +467,10 @@ class DungeonRendererManager(
             }
         }
 
-        if (newFrontWallCells != _frontWallCells.value) _frontWallCells.value = newFrontWallCells
-        if (newSideWallCells != _sideWallCells.value) _sideWallCells.value = newSideWallCells
+        if (newFrontWallCellsBuffer != _frontWallCells.value) _frontWallCells.value = newFrontWallCellsBuffer.toMap()
+        if (newSideWallCellsBuffer != _sideWallCells.value) _sideWallCells.value = newSideWallCellsBuffer.toMap()
 
-        return drawCommands
+        return drawCommandsBuffer
     }
 
     // Warm stone colours for front walls: nearer cells are brighter (torchlight falloff).
@@ -526,21 +531,34 @@ class DungeonRendererManager(
         val DEBUG_LABEL_SIZE = 12.sp
     }
 
+    // Debug label helpers — return a cached TextLayoutResult or null when textMeasurer is absent.
+    // Separate caches per colour prevent collisions (same text string used by both wall types).
+    private fun sideLabel(text: String): TextLayoutResult? =
+        textMeasurer?.let { m ->
+            sideLabelCache.getOrPut(text) {
+                m.measure(text, TextStyle(fontSize = DEBUG_LABEL_SIZE, color = androidx.compose.ui.graphics.Color.Cyan))
+            }
+        }
+
+    private fun frontLabel(text: String): TextLayoutResult? =
+        textMeasurer?.let { m ->
+            frontLabelCache.getOrPut(text) {
+                m.measure(text, TextStyle(fontSize = DEBUG_LABEL_SIZE, color = androidx.compose.ui.graphics.Color.Yellow))
+            }
+        }
+
     // Angular interval subtraction — the read side of the occlusion buffer.
     //
     // Returns the sub-intervals of [interval] not yet covered by any entry in [covered].
     // An empty result means the interval is fully occluded. Non-empty sub-intervals are used
     // directly to clip wall strip geometry to only the visible angular range.
-    private fun subtractCoverage(
-        interval: Pair<Float, Float>,
-        covered: List<Pair<Float, Float>>,
-    ): List<Pair<Float, Float>> {
+    private fun subtractCoverage(interval: Interval, covered: List<Interval>): List<Interval> {
         var remaining = listOf(interval)
         for ((covL, covR) in covered) {
             remaining = remaining.flatMap { (a, b) ->
                 buildList {
-                    if (a < covL) add(a to minOf(b, covL))
-                    if (b > covR) add(maxOf(a, covR) to b)
+                    if (a < covL) add(Interval(a, minOf(b, covL)))
+                    if (b > covR) add(Interval(maxOf(a, covR), b))
                 }
             }
             if (remaining.isEmpty()) break
@@ -554,23 +572,25 @@ class DungeonRendererManager(
     // list stays sorted and non-overlapping. This is an O(n) single-pass merge: walk the existing
     // list, emit intervals that end before the new one starts unchanged, absorb intervals that
     // overlap (expanding the new interval to their union), then emit intervals that start after
-    // the new one unchanged.
-    private fun mergeInto(covered: MutableList<Pair<Float, Float>>, newInterval: Pair<Float, Float>) {
+    // the new one unchanged. Uses the pre-allocated mergeScratch field to avoid per-call allocation.
+    private fun mergeInto(covered: MutableList<Interval>, newInterval: Interval) {
         var (l, r) = newInterval
-        val merged = mutableListOf<Pair<Float, Float>>()
+        mergeScratch.clear()
         var inserted = false
         for ((covL, covR) in covered) {
             when {
-                covR < l -> merged.add(covL to covR)
+                covR < l -> mergeScratch.add(Interval(covL, covR))
                 covL > r -> {
-                    if (!inserted) { merged.add(l to r); inserted = true }
-                    merged.add(covL to covR)
+                    if (!inserted) { mergeScratch.add(Interval(l, r)); inserted = true }
+                    mergeScratch.add(Interval(covL, covR))
                 }
                 else -> { l = minOf(l, covL); r = maxOf(r, covR) }
             }
         }
-        if (!inserted) merged.add(l to r)
+        if (!inserted) mergeScratch.add(Interval(l, r))
         covered.clear()
-        covered.addAll(merged)
+        covered.addAll(mergeScratch)
     }
 }
+
+private data class Interval(val lo: Float, val hi: Float)
