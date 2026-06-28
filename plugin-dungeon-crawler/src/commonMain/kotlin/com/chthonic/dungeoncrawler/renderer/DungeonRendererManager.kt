@@ -99,7 +99,7 @@ class DungeonRendererManager(
         lastViewH = viewH
         lastRenderMode = renderMode
         log("onUpdate")
-        checkNotNull(dungeonViewActor).drawCommands = updateWalls(viewW, viewH)
+        checkNotNull(dungeonViewActor).update(updateWalls(viewW, viewH))
     }
 
     // Front-to-back angular occlusion traversal.
@@ -234,27 +234,9 @@ class DungeonRendererManager(
             return viewH / 2f + wallHeightScale * viewH / (2f * d)
         }
 
-        fun emitFloorCeiling(
-            yTop: Float,
-            yBottom: Float,
-            subIntervals: List<Interval>,
-            floorColor: Color,
-            ceilColor: Color,
-        ) {
-            for ((lo, hi) in subIntervals) {
-                drawCommandsBuffer.add(DrawCommand.FloorCeilingBand(
-                    yFloorClipTop = yTop,
-                    yFloorClipBottom = yBottom,
-                    xClipLeft = lo.toDsX(),
-                    xClipRight = hi.toDsX(),
-                    floorColor = floorColor,
-                    ceilColor = ceilColor,
-                ))
-            }
-        }
-
         // Near band: floor/ceiling of viewer's own cell — always full frustum width.
         emitFloorCeiling(
+            angleToX = angleToX, viewW = viewW,
             yTop = wallBottomY(1), yBottom = viewH,
             subIntervals = listOf(Interval(-frustumAngleHalf, frustumAngleHalf)),
             floorColor = floorBandColor(0), ceilColor = ceilingBandColor(0),
@@ -372,13 +354,7 @@ class DungeonRendererManager(
                 val latLeft = lat - 0.5f
                 val latRight = lat + 0.5f
 
-                // Frustum clip: skip slots entirely outside the outer frustum boundary (e.g.
-                // lat=±3 with fovWidth=4 where fovHalf=2) or not yet visible at this depth
-                // (the frustum narrows toward the apex — at depth D only lats within
-                // ±D*fovHalf/viewDistance are in view).
-                if (maxOf(latLeft, -fovHalf) >= minOf(latRight, fovHalf)) continue
-                val visibleLatHalf = D * fovHalf / viewDistance
-                if (maxOf(latLeft, -visibleLatHalf) >= minOf(latRight, visibleLatHalf)) continue
+                if (!isInFrustum(latLeft, latRight, D)) continue
 
                 val cellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
                 val cellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
@@ -445,9 +421,7 @@ class DungeonRendererManager(
             for (lat in -latMax..latMax) {
                 val latLeft = lat - 0.5f
                 val latRight = lat + 0.5f
-                if (maxOf(latLeft, -fovHalf) >= minOf(latRight, fovHalf)) continue
-                val visibleLatHalf = D * fovHalf / viewDistance
-                if (maxOf(latLeft, -visibleLatHalf) >= minOf(latRight, visibleLatHalf)) continue
+                if (!isInFrustum(latLeft, latRight, D)) continue
 
                 val fCellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
                 val fCellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
@@ -460,6 +434,7 @@ class DungeonRendererManager(
                 if (subIntervals.isEmpty()) continue
 
                 emitFloorCeiling(
+                    angleToX = angleToX, viewW = viewW,
                     yTop = wallBottomY(D + 1), yBottom = wallBottomY(D),
                     subIntervals = subIntervals,
                     floorColor = floorBandColor(D), ceilColor = ceilingBandColor(D),
@@ -511,6 +486,41 @@ class DungeonRendererManager(
             green = CEIL_G + CEIL_G_RANGE * t,
             blue  = CEIL_B + CEIL_B_RANGE * t,
         )
+    }
+
+    // Returns true when the cell slot [latLeft, latRight] has any angular overlap with the visible
+    // frustum at depth D. The frustum has a fixed outer half-width of fovHalf across the whole
+    // depth range, but its visible portion narrows toward the apex — at depth D only slots within
+    // ±D*fovHalf/viewDistance are reachable from the viewer. A slot that fails either check
+    // (outside the outer boundary, or outside the depth-scaled inner frustum) can be skipped.
+    private fun isInFrustum(latLeft: Float, latRight: Float, D: Int): Boolean {
+        if (maxOf(latLeft, -fovHalf) >= minOf(latRight, fovHalf)) return false
+        val visibleLatHalf = D * fovHalf / viewDistance
+        return maxOf(latLeft, -visibleLatHalf) < minOf(latRight, visibleLatHalf)
+    }
+
+    // Emits floor and ceiling bands for each visible angular sub-interval of a cell slot.
+    // angleToX and viewW are passed from updateWalls so the method does not need the local
+    // toDsX extension (which is only in scope inside updateWalls).
+    private fun emitFloorCeiling(
+        angleToX: Float,
+        viewW: Float,
+        yTop: Float,
+        yBottom: Float,
+        subIntervals: List<Interval>,
+        floorColor: Color,
+        ceilColor: Color,
+    ) {
+        for ((lo, hi) in subIntervals) {
+            drawCommandsBuffer.add(DrawCommand.FloorCeilingBand(
+                yFloorClipTop = yTop,
+                yFloorClipBottom = yBottom,
+                xClipLeft = lo * angleToX + viewW / 2f,
+                xClipRight = hi * angleToX + viewW / 2f,
+                floorColor = floorColor,
+                ceilColor = ceilColor,
+            ))
+        }
     }
 
     private companion object {

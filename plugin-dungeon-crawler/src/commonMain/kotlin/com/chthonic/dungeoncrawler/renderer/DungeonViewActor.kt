@@ -38,8 +38,13 @@ class DungeonViewActor(
         initialSize = SceneSize(viewW.sceneUnit, viewH.sceneUnit),
     )
 
-    var drawCommands: List<DrawCommand> = emptyList()
+    internal var drawCommands: List<DrawCommand> = emptyList()
+        private set
     private val trapezoidPath = Path()
+
+    internal fun update(commands: List<DrawCommand>) {
+        drawCommands = commands
+    }
 
     override fun DrawScope.draw() {
         val mode = renderMode()
