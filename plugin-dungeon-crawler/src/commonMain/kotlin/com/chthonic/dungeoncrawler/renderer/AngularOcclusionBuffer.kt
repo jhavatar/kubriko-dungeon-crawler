@@ -8,11 +8,22 @@ internal data class Interval(val lo: Float, val hi: Float)
 //
 // The buffer maintains a sorted, non-overlapping list of covered Intervals. Call clear() at the
 // start of each frame traversal. subtract() queries visibility; merge() registers a solid surface.
-internal class AngularOcclusionBuffer {
+//
+// frustumLo/Hi define the full angular extent of the view frustum. isFull is maintained
+// incrementally in O(1) at the end of each merge() call: because merge() always combines
+// touching intervals, full frustum coverage is always represented by a single entry, so the
+// check reduces to covered.size == 1 && covered[0] spans [frustumLo, frustumHi].
+internal class AngularOcclusionBuffer(private val frustumLo: Float, private val frustumHi: Float) {
     private val covered = mutableListOf<Interval>()
     private val scratch  = mutableListOf<Interval>()
 
-    fun clear() { covered.clear() }
+    // True once the union of covered entries spans the entire frustum with no gaps.
+    // Updated in O(1) after each merge(); read at the end of each depth level to short-circuit
+    // the traversal as soon as no further geometry can be visible.
+    var isFull: Boolean = false
+        private set
+
+    fun clear() { covered.clear(); isFull = false }
 
     // Returns the sub-intervals of [interval] not yet covered. An empty result means the
     // interval is fully occluded. Non-empty sub-intervals clip wall geometry to visible portions.
@@ -49,5 +60,6 @@ internal class AngularOcclusionBuffer {
         if (!inserted) scratch.add(Interval(l, r))
         covered.clear()
         covered.addAll(scratch)
+        isFull = covered.size == 1 && covered[0].lo <= frustumLo && covered[0].hi >= frustumHi
     }
 }

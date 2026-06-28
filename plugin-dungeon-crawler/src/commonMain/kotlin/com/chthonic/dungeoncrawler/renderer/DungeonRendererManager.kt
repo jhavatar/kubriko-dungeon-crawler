@@ -54,13 +54,14 @@ class DungeonRendererManager(
         set(value) { field = value; lastRenderMode = null }
 
     private val fovHalf = fovWidth / 2f
+    private val frustumAngleHalf = fovHalf / viewDistance
 
     // Reusable frame buffers — cleared and refilled each update, never reallocated.
     private val drawCommandsBuffer      = mutableListOf<DrawCommand>()
     private val newFrontWallCellsBuffer = mutableMapOf<Pair<Int, Int>, String>()
     private val newSideWallCellsBuffer  = mutableMapOf<Pair<Int, Int>, String>()
     // Angular occlusion buffer tracking which frustum sub-intervals are covered by solid walls.
-    private val occlusionBuffer = AngularOcclusionBuffer()
+    private val occlusionBuffer = AngularOcclusionBuffer(-frustumAngleHalf, frustumAngleHalf)
     // Local copy of the logging flag: Manager exposes no protected accessor, so we store it
     // here to guard hot-path log calls and prevent string interpolation when logging is off.
     private val debugLogging = isLoggingEnabled
@@ -205,9 +206,6 @@ class DungeonRendererManager(
         newSideWallCellsBuffer.clear()
         drawCommandsBuffer.clear()
 
-        // frustumAngleHalf is the maximum visible angle: a ray to the far corner of the outermost
-        // slot (lat = ±fovHalf at depth = viewDistance) has angle ±fovHalf/viewDistance.
-        val frustumAngleHalf = fovHalf / viewDistance
         occlusionBuffer.clear()
 
         // Converts an angular position to a DrawScope x coordinate.
@@ -439,6 +437,10 @@ class DungeonRendererManager(
                     floorColor = colorTheme.floorColor(D, viewDistance), ceilColor = colorTheme.ceilColor(D, viewDistance),
                 )
             }
+
+            // Early exit: once the entire frustum is covered, no geometry at greater depths
+            // can be visible — every subtract() would return empty. Break before the next D.
+            if (occlusionBuffer.isFull) break
         }
 
         if (newFrontWallCellsBuffer != _frontWallCells.value) _frontWallCells.value = newFrontWallCellsBuffer.toMap()
