@@ -249,18 +249,57 @@ class DungeonRendererManager(
             return viewH / 2f + wallHeightScale * viewH / (2f * d)
         }
 
-        // Near band: floor/ceiling of viewer's own cell — always full frustum width.
-        emitFloorCeiling(
-            angleToX = angleToX,
-            viewW = viewW,
-            yTop = wallBottomY(1),
-            yBottom = viewH,
-            subIntervals = listOf(Interval(-frustumAngleHalf, frustumAngleHalf)),
-            floorColor = colorTheme.floorColor(0, viewDistance),
-            ceilColor = colorTheme.ceilColor(0, viewDistance),
-            floorTileIndex = floorTile,
-            ceilTileIndex = ceilTile,
-        )
+        // Near band: floor/ceiling for every open cell at depth 0→1.
+        //
+        // The near band spans from yTop=wallBottomY(1) to yBottom=viewH. wallBottomY(d)=viewH
+        // when d=wallHeightScale, so the "near" y-edge corresponds to depth d=wallHeightScale,
+        // not depth 0. xNear is the cell-boundary projection at that finite depth — for lat=0
+        // this gives [0, viewW]; for lat=±1 the near corners are off-screen but well-defined,
+        // giving the correct converging trapezoid shape (e.g. lat=+1: xNearLeft=viewW so the
+        // left boundary runs from (0.9·W, 0.9·H) → (viewW, viewH), not back toward x=0).
+        //
+        // lat=0 uses the full frustum interval [−frustumAngleHalf, +frustumAngleHalf] so
+        // that xClipLeft=0 and xClipRight=viewW. drawFloorCeilingTextured expands the clip
+        // only toward xFar (not xNear), so the clip stays [0, viewW] and the full lat=0
+        // trapezoid — including the diagonal near-edge corners — is drawn.
+        //
+        // Lateral cells (lat=±1, ±2…) use the frustum-clamped cell angular range as their
+        // sub-interval, giving a narrow clip (e.g. [0.9·W, W] for lat=+1). canvas.clipPath
+        // constrains drawing to the corner triangle that the lat=0 trapezoid cannot reach.
+        //
+        // Emission order: lat=0 first, then lateral cells outward. Lateral bands draw on
+        // top of lat=0 in the corner triangle area, replacing it with the cell's tile.
+        for (latAbs in 0..latMax + 1) {
+            val lats = if (latAbs == 0) listOf(0) else listOf(-latAbs, latAbs)
+            for (lat in lats) {
+                val latLeft  = lat - 0.5f
+                val latRight = lat + 0.5f
+                val angleLeft  = if (lat == 0) -frustumAngleHalf else maxOf(latLeft,  -frustumAngleHalf)
+                val angleRight = if (lat == 0)  frustumAngleHalf else minOf(latRight,  frustumAngleHalf)
+                if (angleLeft >= angleRight) continue
+
+                val nCellX = viewer.cellX + lat * right.dx
+                val nCellY = viewer.cellY + lat * right.dy
+                if (tileMap.cellTypeAt(nCellX, nCellY) == CellType.WALL) continue
+
+                emitFloorCeiling(
+                    angleToX = angleToX,
+                    viewW = viewW,
+                    yTop = wallBottomY(1),
+                    yBottom = viewH,
+                    xNearLeft  = latLeft  / wallHeightScale * angleToX + viewW / 2f,
+                    xNearRight = latRight / wallHeightScale * angleToX + viewW / 2f,
+                    xFarLeft   = latLeft  * angleToX + viewW / 2f,
+                    xFarRight  = latRight * angleToX + viewW / 2f,
+                    subIntervals = listOf(Interval(angleLeft, angleRight)),
+                    floorColor = colorTheme.floorColor(0, viewDistance),
+                    ceilColor = colorTheme.ceilColor(0, viewDistance),
+                    floorTileIndex = floorTile,
+                    ceilTileIndex = ceilTile,
+                    vNearFraction = 1f - wallHeightScale,
+                )
+            }
+        }
 
         for (D in 1..viewDistance) {
             val sideDepth = D - 1  // near depth of this strip; far depth is D
@@ -457,29 +496,49 @@ class DungeonRendererManager(
             }
 
             // Floor/ceiling per open cell at depth D.
-            // Emitted after step 3 so coverage includes every wall at depths 1..D.
             // Only open cells emit (wall cells have their front face drawn instead).
-            for (lat in -latMax..latMax) {
+            // D == viewDistance is skipped: that iteration only draws the front wall at the
+            // far clip boundary; the floor of that cell (depth D→D+1) is beyond view range.
+            // No occlusion-buffer check here: the buffer is depth-agnostic, so a side wall at
+            // sideDepth 0..D would wrongly block floor/ceiling beyond its actual depth range
+            // (e.g. a sideDepth=0 wall covers depth 0..1 only, but the buffer would also block
+            // the floor at depth 1..2 in the same angular range). Instead, emit every visible
+            // open cell's full frustum-clamped interval and rely on Pass 2 walls to occlude any
+            // over-draw — walls are opaque and always drawn on top of Pass 1 floor/ceiling.
+            if (D < viewDistance) for (lat in -latMax..latMax) {
                 val latLeft = lat - 0.5f
                 val latRight = lat + 0.5f
-                if (!isInFrustum(latLeft, latRight, D)) continue
+                // Floor band spans depth D→D+1: check visibility against the far edge (D+1),
+                // where the frustum is wider. Using D alone misses cells that enter the frustum
+                // partway through the band (e.g. lat=2 at D=2 is visible from depth 2.4 onward).
+                if (!isInFrustum(latLeft, latRight, D + 1)) continue
 
                 val fCellX = viewer.cellX + D * viewer.facing.dx + lat * right.dx
                 val fCellY = viewer.cellY + D * viewer.facing.dy + lat * right.dy
                 if (tileMap.cellTypeAt(fCellX, fCellY) == CellType.WALL) continue
 
-                val angleLeft = maxOf(latLeft / D, -frustumAngleHalf)
-                val angleRight = minOf(latRight / D, frustumAngleHalf)
+                // angleLeft/angleRight use the extreme angles each boundary reaches in [D, D+1].
+                // For positive lat the leftmost angle is at the far edge (D+1); for negative lat at D.
+                // Symmetrically, for negative lat the rightmost angle is at the far edge (D+1); for positive at D.
+                val angleLeft  = maxOf(minOf(latLeft  / D.toFloat(), latLeft  / (D + 1).toFloat()), -frustumAngleHalf)
+                val angleRight = minOf(maxOf(latRight / D.toFloat(), latRight / (D + 1).toFloat()),  frustumAngleHalf)
                 if (angleLeft >= angleRight) continue
-                val subIntervals = occlusionBuffer.subtract(Interval(angleLeft, angleRight))
-                if (subIntervals.isEmpty()) continue
 
+                // Perspective quad corners: near edge at depth D (wider), far edge at D+1 (narrower).
+                val fcXNearLeft  = latLeft  / D.toFloat() * angleToX + viewW / 2f
+                val fcXNearRight = latRight / D.toFloat() * angleToX + viewW / 2f
+                val fcXFarLeft   = latLeft  / (D + 1).toFloat() * angleToX + viewW / 2f
+                val fcXFarRight  = latRight / (D + 1).toFloat() * angleToX + viewW / 2f
                 emitFloorCeiling(
                     angleToX = angleToX,
                     viewW = viewW,
                     yTop = wallBottomY(D + 1),
                     yBottom = wallBottomY(D),
-                    subIntervals = subIntervals,
+                    xNearLeft  = fcXNearLeft,
+                    xNearRight = fcXNearRight,
+                    xFarLeft   = fcXFarLeft,
+                    xFarRight  = fcXFarRight,
+                    subIntervals = listOf(Interval(angleLeft, angleRight)),
                     floorColor = colorTheme.floorColor(D, viewDistance),
                     ceilColor = colorTheme.ceilColor(D, viewDistance),
                     floorTileIndex = floorTile,
@@ -514,16 +573,22 @@ class DungeonRendererManager(
     // Emits floor and ceiling bands for each visible angular sub-interval of a cell slot.
     // angleToX and viewW are passed from buildDrawCommands so the method does not need the local
     // toDsX extension (which is only in scope inside buildDrawCommands).
+    // xNear*/xFar* are the full perspective quad corners for perspective-correct texture mapping.
     private fun emitFloorCeiling(
         angleToX: Float,
         viewW: Float,
         yTop: Float,
         yBottom: Float,
+        xNearLeft: Float,
+        xNearRight: Float,
+        xFarLeft: Float,
+        xFarRight: Float,
         subIntervals: List<Interval>,
         floorColor: Color,
         ceilColor: Color,
         floorTileIndex: Int = 0,
         ceilTileIndex: Int = 0,
+        vNearFraction: Float = 1f,
     ) {
         for ((lo, hi) in subIntervals) {
             drawCommandsBuffer.add(
@@ -534,8 +599,13 @@ class DungeonRendererManager(
                     xClipRight = hi * angleToX + viewW / 2f,
                     floorColor = floorColor,
                     ceilColor = ceilColor,
+                    xNearLeft = xNearLeft,
+                    xNearRight = xNearRight,
+                    xFarLeft = xFarLeft,
+                    xFarRight = xFarRight,
                     floorTileIndex = floorTileIndex,
                     ceilTileIndex = ceilTileIndex,
+                    vNearFraction = vNearFraction,
                 )
             )
         }

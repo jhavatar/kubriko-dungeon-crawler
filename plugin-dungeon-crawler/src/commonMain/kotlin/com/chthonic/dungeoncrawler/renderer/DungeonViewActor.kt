@@ -96,29 +96,123 @@ class DungeonViewActor(
 
     private fun DrawScope.drawFloorCeilingTextured(cmd: DrawCommand.FloorCeilingBand) {
         val a = atlas ?: return
-        val xLeft  = cmd.xClipLeft.toInt()
-        val bandW  = (cmd.xClipRight - cmd.xClipLeft).toInt().coerceAtLeast(1)
-        // Round top down and bottom up so adjacent depth bands share a pixel edge with no gap.
-        val floorTop    = cmd.yFloorClipTop.toInt()
-        val floorBottom = kotlin.math.ceil(cmd.yFloorClipBottom).toInt()
-        val bandH = (floorBottom - floorTop).coerceAtLeast(1)
-        drawImage(
-            image = a.image,
-            srcOffset = a.srcOffset(cmd.floorTileIndex),
-            srcSize = a.srcSize(),
-            dstOffset = IntOffset(xLeft, floorTop),
-            dstSize = IntSize(bandW, bandH),
-        )
-        val ceilTop    = (size.height - cmd.yFloorClipBottom).toInt()
-        val ceilBottom = kotlin.math.ceil(size.height - cmd.yFloorClipTop).toInt()
-        val ceilH = (ceilBottom - ceilTop).coerceAtLeast(1)
-        drawImage(
-            image = a.image,
-            srcOffset = a.srcOffset(cmd.ceilTileIndex),
-            srcSize = a.srcSize(),
-            dstOffset = IntOffset(xLeft, ceilTop),
-            dstSize = IntSize(bandW, ceilH),
-        )
+
+        // Start from the sub-interval angular clip (xClipLeft/xClipRight) and expand outward
+        // only to include the trapezoid's far corners (xFarLeft/xFarRight).
+        //
+        // Why not expand to xNear? xNear is [0, viewW] for all near-band (depth-0) cells — it's
+        // a screen-edge clamp for a diverging projection, not a real cell corner. Including it
+        // would widen the clip to the full screen width for lateral near-band cells, causing them
+        // to overdraw adjacent cells' textures. Expanding to xFar is safe: at depth D+1 the
+        // trapezoid's far corners can lie outside the depth-D angular sub-interval clip (Bug 2),
+        // and the canvas.clipPath(trapezoidPath) below always enforces the exact shape.
+        val bandClipLeft  = minOf(cmd.xClipLeft, cmd.xFarLeft).coerceAtLeast(0f)
+        val bandClipRight = maxOf(cmd.xClipRight, cmd.xFarRight).coerceAtMost(size.width)
+
+        // Floor — trapezoid: wide at yFloorClipBottom (near), narrow at yFloorClipTop (far/horizon).
+        fillFloorMatrix(cmd, a, isFloor = true)
+        trapezoidPath.reset()
+        trapezoidPath.moveTo(cmd.xFarLeft,  cmd.yFloorClipTop)
+        trapezoidPath.lineTo(cmd.xFarRight, cmd.yFloorClipTop)
+        trapezoidPath.lineTo(cmd.xNearRight, cmd.yFloorClipBottom)
+        trapezoidPath.lineTo(cmd.xNearLeft,  cmd.yFloorClipBottom)
+        trapezoidPath.close()
+        clipRect(left = bandClipLeft, top = cmd.yFloorClipTop,
+                 right = bandClipRight, bottom = cmd.yFloorClipBottom) {
+            drawIntoCanvas { canvas ->
+                canvas.save()
+                canvas.clipPath(trapezoidPath)
+                canvas.concat(perspectiveMatrix)
+                canvas.drawImage(a.image, Offset.Zero, imagePaint)
+                canvas.restore()
+            }
+        }
+
+        // Ceiling — mirror of floor around the horizon.
+        val ceilTop    = size.height - cmd.yFloorClipBottom  // near ceiling (top of screen)
+        val ceilBottom = size.height - cmd.yFloorClipTop     // far ceiling (near horizon)
+        fillFloorMatrix(cmd, a, isFloor = false)
+        trapezoidPath.reset()
+        trapezoidPath.moveTo(cmd.xFarLeft,  ceilBottom)
+        trapezoidPath.lineTo(cmd.xFarRight, ceilBottom)
+        trapezoidPath.lineTo(cmd.xNearRight, ceilTop)
+        trapezoidPath.lineTo(cmd.xNearLeft,  ceilTop)
+        trapezoidPath.close()
+        clipRect(left = bandClipLeft, top = ceilTop,
+                 right = bandClipRight, bottom = ceilBottom) {
+            drawIntoCanvas { canvas ->
+                canvas.save()
+                canvas.clipPath(trapezoidPath)
+                canvas.concat(perspectiveMatrix)
+                canvas.drawImage(a.image, Offset.Zero, imagePaint)
+                canvas.restore()
+            }
+        }
+    }
+
+    // Fills perspectiveMatrix for a floor or ceiling quad with horizontal top and bottom edges.
+    //
+    // Derivation: the quad has corners
+    //   TL=(xFarLeft,yF), TR=(xFarRight,yF)   [far edge, v=0, closer to horizon]
+    //   BL=(xNearLeft,yN), BR=(xNearRight,yN)  [near edge, v=1, closer to player]
+    //
+    // Both horizontal edges have constant y, so h20=0 and h10=0 (unlike the vertical-sided wall
+    // trapezoid where h20≠0). The perspective W component is h21 (varying with tile y/V), giving
+    // convergence toward the horizon as V increases from far (0) to near (1).
+    //
+    // h21 = (widthFar − widthNear) / widthNear   [negative when widthFar < widthNear]
+    // h00 = widthFar                              [x scale at far edge]
+    // h01 = xNearLeft·(h21+1) − xFarLeft         [x shear in V direction]
+    // h11 = yN·(h21+1) − yF                      [y scale]
+    // h02 = xFarLeft, h12 = yF, h22 = 1
+    //
+    // V maps linearly in depth d (V = D+1−d for a band at depth D to D+1), which gives
+    // correct per-depth tiling without perspective over-compression at close range.
+    private fun DrawScope.fillFloorMatrix(
+        cmd: DrawCommand.FloorCeilingBand,
+        a: DungeonAtlas,
+        isFloor: Boolean,
+    ) {
+        val tileIdx  = if (isFloor) cmd.floorTileIndex else cmd.ceilTileIndex
+        val tileLeft = (tileIdx % a.cols) * a.tileSize.toFloat()
+        val tileTop  = (tileIdx / a.cols) * a.tileSize.toFloat()
+        val ts = a.tileSize.toFloat()
+
+        // For floor: far = yFloorClipTop (small y, near horizon), near = yFloorClipBottom (large y).
+        // For ceiling: far = ceilBottom (large y, near horizon), near = ceilTop (small y, top of screen).
+        val yF: Float
+        val yN: Float
+        if (isFloor) {
+            yF = cmd.yFloorClipTop
+            yN = cmd.yFloorClipBottom
+        } else {
+            yN = size.height - cmd.yFloorClipBottom  // near ceiling = top of screen
+            yF = size.height - cmd.yFloorClipTop     // far ceiling = bottom of ceiling strip
+        }
+
+        val widthFar  = cmd.xFarRight  - cmd.xFarLeft
+        val widthNear = cmd.xNearRight - cmd.xNearLeft
+        val h21 = if (widthNear > 0f) (widthFar - widthNear) / widthNear else 0f
+        val h00 = widthFar
+        // scale = 1/vNearFraction: stretches h01/h11 so the near corner maps to atlas V=(vNearFraction*ts)
+        // instead of V=ts. For depth-D bands vNearFraction=1 (no change). For the near band
+        // (depth 0→1, only 0→wallHeightScale visible), vNearFraction=(1-wallHeightScale) so only
+        // the correct fraction of the tile is shown, matching the continuous-tiling depth scale.
+        val scale = 1f / cmd.vNearFraction
+        val h01 = (cmd.xNearLeft * (h21 + 1f) - cmd.xFarLeft) * scale
+        val h11 = (yN * (h21 + 1f) - yF) * scale
+        // h10=0, h20=0, h22=1, h02=xFarLeft, h12=yF
+
+        // Compose with S^{-1}: u=(px−tileLeft)/ts, v=(py−tileTop)/ts.
+        // U uses ts (x direction, lateral), V uses ts (y direction, depth).
+        val v = perspectiveMatrix.values
+        v[0]  = h00 / ts;   v[1]  = 0f;         v[2]  = 0f; v[3]  = 0f
+        v[4]  = h01 / ts;   v[5]  = h11 / ts;   v[6]  = 0f; v[7]  = h21 / ts / cmd.vNearFraction
+        v[8]  = 0f;          v[9]  = 0f;         v[10] = 1f; v[11] = 0f
+        v[12] = cmd.xFarLeft - h00 * tileLeft / ts - h01 * tileTop / ts
+        v[13] = yF           - h11 * tileTop / ts
+        v[14] = 0f
+        v[15] = 1f           - h21 * tileTop / ts / cmd.vNearFraction
     }
 
     private fun DrawScope.drawFrontStrip(cmd: DrawCommand.FrontStrip, mode: RenderMode) {
