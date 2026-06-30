@@ -300,8 +300,8 @@ class DungeonRendererManager(
                     xFarLeft   = latLeft  * angleToX + viewW / 2f,
                     xFarRight  = latRight * angleToX + viewW / 2f,
                     subIntervals = listOf(Interval(angleLeft, angleRight)),
-                    floorColor = colorTheme.floorColor(0, viewDistance),
-                    ceilColor = colorTheme.ceilColor(0, viewDistance),
+                    floorColor = colorTheme.floorColor(torchBrightness(0.5f)),
+                    ceilColor = colorTheme.ceilColor(torchBrightness(0.5f)),
                     floorTileIndex = floorTile,
                     ceilTileIndex = ceilTile,
                     vNearFraction = 1f - wallHeightScale,
@@ -392,7 +392,7 @@ class DungeonRendererManager(
                 val yNearBot_ds = viewH / 2f + clampedYNearHalf
                 val yFarTop_ds = viewH / 2f - yFarHalf
                 val yFarBot_ds = viewH / 2f + yFarHalf
-                val color = colorTheme.sideWallColor(sideDepth, viewDistance)
+                val color = colorTheme.sideWallColor(torchBrightness(hypot(sideDepth.toFloat() + 0.5f, xB)))
 
                 if (debugLogging) log("buildDrawCommands", "add side wall $wallLat, $sideDepth")
                 val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
@@ -459,7 +459,7 @@ class DungeonRendererManager(
                     val slotHeight = viewH * wallHeightScale / D
                     val yTop = viewH / 2f - slotHeight / 2f
                     val yBottom = viewH / 2f + slotHeight / 2f
-                    val color = colorTheme.frontWallColor(D, viewDistance)
+                    val color = colorTheme.frontWallColor(torchBrightness(hypot(D.toFloat(), lat.toFloat())))
 
                     // Use the full (unclipped) cell angular extent so that UV sampling in
                     // drawFrontStrip spans the correct slice of the tile even when the frustum
@@ -551,8 +551,8 @@ class DungeonRendererManager(
                     xFarLeft   = fcXFarLeft,
                     xFarRight  = fcXFarRight,
                     subIntervals = listOf(Interval(angleLeft, angleRight)),
-                    floorColor = colorTheme.floorColor(D, viewDistance),
-                    ceilColor = colorTheme.ceilColor(D, viewDistance),
+                    floorColor = colorTheme.floorColor(torchBrightness(D.toFloat() + 0.5f)),
+                    ceilColor = colorTheme.ceilColor(torchBrightness(D.toFloat() + 0.5f)),
                     floorTileIndex = floorTile,
                     ceilTileIndex = ceilTile,
                     floorNearBrightness = torchBrightness(hypot(D.toFloat(), lat.toFloat())),
