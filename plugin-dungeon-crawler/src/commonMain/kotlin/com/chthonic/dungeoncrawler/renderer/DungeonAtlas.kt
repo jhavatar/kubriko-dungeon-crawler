@@ -11,9 +11,9 @@ data class DungeonAtlas(
     val image: ImageBitmap,
     val tileSize: Int,
     val cols: Int,
-    val frontWallTile: Int = 1,
-    val sideWallTile: Int = 1,
-    val floorTile: Int = 2,
+    val frontWallTile: Int = 0,
+    val sideWallTile: Int = 0,
+    val floorTile: Int = 1,
     val ceilTile: Int = 0,
 ) {
     fun srcOffset(tileIndex: Int) = IntOffset(
