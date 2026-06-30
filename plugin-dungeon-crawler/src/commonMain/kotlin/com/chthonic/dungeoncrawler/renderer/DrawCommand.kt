@@ -22,6 +22,10 @@ sealed class DrawCommand {
     // Emitted once per open (lat, depth) slot after angular-occlusion culling.
     // floorColor / ceilColor are flat per-cell tints — replace with texture references when
     // real floor/ceiling textures are added.
+    //
+    // xNear*/xFar*: full perspective quad corner x-positions for texture mapping.
+    //   yFloorClipBottom = near edge (depth D, closer to player)
+    //   yFloorClipTop    = far edge  (depth D+1, closer to horizon)
     data class FloorCeilingBand(
         val yFloorClipTop: Float,    // upper edge of floor strip (closer to horizon)
         val yFloorClipBottom: Float, // lower edge of floor strip (closer to screen bottom)
@@ -29,6 +33,23 @@ sealed class DrawCommand {
         val xClipRight: Float,       // right DrawScope x bound (angular sub-interval end)
         val floorColor: Color,
         val ceilColor: Color,
+        val xNearLeft: Float,        // x at near edge (depth D), left cell boundary
+        val xNearRight: Float,       // x at near edge (depth D), right cell boundary
+        val xFarLeft: Float,         // x at far edge (depth D+1), left cell boundary
+        val xFarRight: Float,        // x at far edge (depth D+1), right cell boundary
+        val floorTileIndex: Int = 0,
+        val ceilTileIndex: Int = 0,
+        // Fraction of the tile V range shown from far edge (V=0) to near edge (V=vNearFraction*ts).
+        // 1.0 for depth-D bands (full tile per cell). For the near band: (1−wallHeightScale),
+        // because only the depth 0.8→1 portion of the player's cell (depth 0→1) is on screen.
+        val vNearFraction: Float = 1f,
+        // Near/far brightness for the TEXTURED-mode gradient (applied via BlendMode.Multiply).
+        // "Near" = player-side edge; "far" = horizon-side edge. A continuous gradient is drawn
+        // between them so adjacent depth bands connect seamlessly.
+        val floorNearBrightness: Float = 1f,
+        val floorFarBrightness: Float = 1f,
+        val ceilNearBrightness: Float = 1f,
+        val ceilFarBrightness: Float = 1f,
     ) : DrawCommand()
 
     // A visible sub-interval strip of a front-facing wall.
@@ -44,6 +65,9 @@ sealed class DrawCommand {
         // cell-geometry edge borders from occlusion-seam clip edges (no border at seam).
         val xWallLeft: Float,
         val xWallRight: Float,
+        val tileIndex: Int = 0,
+        // 0..1 brightness used in TEXTURED mode (applied via grayscale ColorFilter.Multiply).
+        val brightness: Float = 1f,
         val debugLabel: TextLayoutResult? = null,
     ) : DrawCommand()
 
@@ -60,6 +84,14 @@ sealed class DrawCommand {
         val xClipLeft: Float,
         val xClipRight: Float,
         val color: Color,
+        val tileIndex: Int = 0,
+        // 0..1 brightness used in TEXTURED mode (applied via grayscale ColorFilter.Multiply).
+        val brightness: Float = 1f,
+        // Fraction (0..1) of the tile U range that is off-screen at the near edge.
+        // 0 = full tile visible from near to far (typical for sideDepth > 0).
+        // > 0 = near end of the wall face is clipped by the screen edge (always the case for
+        //   sideDepth=0, where the wall extends behind the player; also for large |xB| + small depth).
+        val tileUNearFraction: Float = 0f,
         val debugLabel: TextLayoutResult? = null,
     ) : DrawCommand()
 }

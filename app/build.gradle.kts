@@ -37,6 +37,7 @@ kotlin {
             implementation(project(":plugin-tilemap"))
             implementation(project(":plugin-dungeon-crawler"))
             implementation(compose.foundation)
+            implementation(compose.components.resources)
         }
         val androidMain by getting
         androidMain.dependencies {

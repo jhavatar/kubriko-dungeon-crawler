@@ -7,20 +7,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.chthonic.dungeoncrawler.renderer.DungeonAtlas
 import com.chthonic.dungeoncrawler.renderer.DungeonRendererManager
+import com.chthonic.dungeoncrawler.renderer.RenderMode
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.Mob
 import com.chthonic.dungeoncrawler.tilemap.TileMap
@@ -30,6 +32,9 @@ import com.pandulapeter.kubriko.KubrikoViewport
 import com.pandulapeter.kubriko.keyboardInput.KeyboardInputManager
 import com.pandulapeter.kubriko.logger.Logger
 import com.pandulapeter.kubriko.manager.ViewportManager
+import kubriko_dungeon_crawler.app.generated.resources.Res
+import kubriko_dungeon_crawler.app.generated.resources.dungeon_atlas
+import org.jetbrains.compose.resources.imageResource
 
 private data class ViewerSnapshot(val cellX: Int, val cellY: Int, val facing: Facing)
 
@@ -40,14 +45,14 @@ fun DungeonCrawlerApp() {
         TileMapManager(
             initialTileMap = TileMap.fromString(
                 """
-                ########
-                #...#.##
-                #.#.#.##
-                #......#
-                ######.#
-                ####...#
-                #......#
-                ########
+                ################
+                #...#.##.......#
+                #.#.#.##.......#
+                #..............#
+                ######.#.......#
+                ####...#.......#
+                #......#.......#
+                ################
                 """
             )
         )
@@ -73,15 +78,25 @@ fun DungeonCrawlerApp() {
             isLoggingEnabled = true,
         )
     }
+    val atlasImage = imageResource(Res.drawable.dungeon_atlas)
     val textMeasurer = rememberTextMeasurer()
-    val dungeonRenderer = remember {
+    val dungeonRenderer = remember(atlasImage) {
         // Two caches — one per colour — so the same label text used for both a side wall
         // (cyan) and a front wall (yellow) never resolves to the wrong TextLayoutResult.
-        val sideCache  = mutableMapOf<String, TextLayoutResult>()
+        val sideCache = mutableMapOf<String, TextLayoutResult>()
         val frontCache = mutableMapOf<String, TextLayoutResult>()
         DungeonRendererManager(
             fovWidth = 5,
             viewer = viewer,
+//            renderMode = RenderMode.Wireframe(),
+//            renderMode = RenderMode.Solid(),
+            renderMode = RenderMode.Textured(
+                atlas = DungeonAtlas(
+                    image = atlasImage,
+                    tileSize = 128,
+                    cols = 2,
+                ),
+            ),
             debugLabelProvider = { text, isSideWall ->
                 (if (isSideWall) sideCache else frontCache).getOrPut(text) {
                     textMeasurer.measure(
