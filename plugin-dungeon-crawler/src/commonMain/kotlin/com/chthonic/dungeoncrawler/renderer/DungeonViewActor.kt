@@ -439,10 +439,6 @@ class DungeonViewActor(
     // W row (Perspective0/1/2 = values[3/7/15]) is preserved through Compose's
     // Matrix → Android 3×3 / Skia 4×4 conversion.
     //
-    // U-axis aspect correction: for narrow strips (strip width << strip height) the full
-    // tile would be compressed into very few horizontal pixels, making texels appear tall
-    // and thin. ts_u < ts limits the visible tile range in U so texels appear square at
-    // the far (smaller) end of the trapezoid. The V axis always uses ts (full tile height).
     private fun fillPerspectiveMatrix(cmd: DrawCommand.SideStrip, a: DungeonAtlas) {
         val tileLeft = (cmd.tileIndex % a.cols) * a.tileSize.toFloat()
         val tileTop  = (cmd.tileIndex / a.cols) * a.tileSize.toFloat()
@@ -454,20 +450,21 @@ class DungeonViewActor(
         val dV  = cmd.yFarTop - cmd.yNearTop + g * cmd.yFarTop
         val eV  = cmd.yNearBot - cmd.yNearTop
 
-        val stripH = cmd.yFarBot - cmd.yFarTop
-        val uAspect = if (stripH > 0f) (kotlin.math.abs(cmd.xFar - cmd.xNear) / stripH).coerceAtMost(1f) else 1f
-        val ts_u = ts * uAspect  // effective U tile width; ts_u ≤ ts
+        // tileUNearFraction: fraction of the tile hidden behind the screen edge at the near end.
+        // Adjust tile left to start at the visible portion; shrink ts_u accordingly.
+        val ts_u = (ts * (1f - cmd.tileUNearFraction)).coerceAtLeast(1f)
+        val adjustedTileLeft = tileLeft + cmd.tileUNearFraction * ts
 
-        // H_total = H_unit · S⁻¹  (maps tile pixel → viewport; U uses ts_u, V uses ts)
+        // H_total = H_unit · S⁻¹  (maps tile pixel → viewport; both U and V use ts)
         val h00 = aV / ts_u
         val h10 = dV / ts_u
         val h20 = g  / ts_u
         val h01 = 0f
         val h11 = eV / ts
         val h21 = 0f
-        val h02 = -aV * tileLeft / ts_u + cmd.xNear
-        val h12 = -dV * tileLeft / ts_u - eV * tileTop / ts + cmd.yNearTop
-        val h22 = -g  * tileLeft / ts_u + 1f
+        val h02 = -aV * adjustedTileLeft / ts_u + cmd.xNear
+        val h12 = -dV * adjustedTileLeft / ts_u - eV * tileTop / ts + cmd.yNearTop
+        val h22 = -g  * adjustedTileLeft / ts_u + 1f
 
         // Compose Matrix is column-major 4×4.
         // 2D perspective embedding: Z row/column is identity pass-through.

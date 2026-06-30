@@ -87,6 +87,11 @@ sealed class DrawCommand {
         val tileIndex: Int = 0,
         // 0..1 brightness used in TEXTURED mode (applied via grayscale ColorFilter.Multiply).
         val brightness: Float = 1f,
+        // Fraction (0..1) of the tile U range that is off-screen at the near edge.
+        // 0 = full tile visible from near to far (typical for sideDepth > 0).
+        // > 0 = near end of the wall face is clipped by the screen edge (always the case for
+        //   sideDepth=0, where the wall extends behind the player; also for large |xB| + small depth).
+        val tileUNearFraction: Float = 0f,
         val debugLabel: TextLayoutResult? = null,
     ) : DrawCommand()
 }

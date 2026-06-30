@@ -95,10 +95,6 @@ fun DungeonCrawlerApp() {
                     image = atlasImage,
                     tileSize = 128,
                     cols = 2,
-                    frontWallTile = 0,
-                    sideWallTile = 0,
-                    floorTile = 1,
-                    ceilTile = 2,
                 ),
             ),
             debugLabelProvider = { text, isSideWall ->

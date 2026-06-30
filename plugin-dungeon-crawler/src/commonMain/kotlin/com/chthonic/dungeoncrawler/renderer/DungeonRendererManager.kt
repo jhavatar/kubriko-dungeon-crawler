@@ -42,7 +42,7 @@ class DungeonRendererManager(
 ) {
     // exp(-TORCH_K * dist) — torch brightness falls off exponentially with Euclidean distance.
     // TORCH_K controls the falloff rate; MIN_BRIGHTNESS prevents surfaces going fully black.
-    private fun torchBrightness(dist: Float) = exp(-TORCH_K * (dist - 1f)).coerceAtLeast(MIN_BRIGHTNESS)
+    private fun torchBrightness(dist: Float) = exp(-TORCH_K * (dist - 1f)).coerceIn(MIN_BRIGHTNESS, 1f)
 
     private val tileMapManager by manager<TileMapManager>()
     private val actorManager by manager<ActorManager>()
@@ -112,7 +112,7 @@ class DungeonRendererManager(
         val buildDrawCommandsElapsed = measureTime {
             checkNotNull(dungeonViewActor).update(buildDrawCommands(viewW, viewH))
         }
-        log(
+        if (debugLogging) log(
             "onUpdate",
             "render ${buildDrawCommandsElapsed.inWholeMicroseconds}µs, ${drawCommandsBuffer.size} cmds"
         )
@@ -277,7 +277,7 @@ class DungeonRendererManager(
         //
         // Emission order: lat=0 first, then lateral cells outward. Lateral bands draw on
         // top of lat=0 in the corner triangle area, replacing it with the cell's tile.
-        for (latAbs in 0..latMax + 1) {
+        for (latAbs in 0..latMax) {
             val lats = if (latAbs == 0) listOf(0) else listOf(-latAbs, latAbs)
             for (lat in lats) {
                 val latLeft  = lat - 0.5f
@@ -398,6 +398,14 @@ class DungeonRendererManager(
                 val yFarBot_ds = viewH / 2f + yFarHalf
                 val color = colorTheme.sideWallColor(torchBrightness(hypot(sideDepth.toFloat() + 0.5f, xB)))
 
+                // Fraction of the tile U range hidden behind the screen edge at the near end.
+                // At sideDepth=0 the wall extends from the player (d=0, off-screen) to d=D, so
+                // only the d=[dEntry, D] slice is visible. For deeper walls dEntry ≤ sideDepth
+                // meaning the full near face is on screen and the fraction is 0.
+                val dEntry = kotlin.math.abs(xB) * viewDistance.toFloat() / fovHalf
+                val tileUNearFraction = if (dEntry <= sideDepth) 0f else
+                    ((dEntry - sideDepth) / (D - sideDepth).toFloat()).coerceIn(0f, 1f)
+
                 if (debugLogging) log("buildDrawCommands", "add side wall $wallLat, $sideDepth")
                 val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
                 newSideWallCellsBuffer[wCellX to wCellY] = "$k,$sideDepth"
@@ -413,7 +421,8 @@ class DungeonRendererManager(
                             xClipRight = hi.toDsX(),
                             color = color,
                             tileIndex = sideWallTile,
-                            brightness = torchBrightness(hypot(sideDepth.toFloat() + 0.5f, xB)) * colorTheme.sideWallShadow,
+                            brightness = torchBrightness(hypot(sideDepth.toFloat() + 0.5f, xB)) * if (renderMode is RenderMode.Wireframe) 1f else colorTheme.sideWallShadow,
+                            tileUNearFraction = tileUNearFraction,
                             debugLabel = if (idx == 0) debugLabelProvider?.invoke(
                                 "$k,$sideDepth",
                                 true
