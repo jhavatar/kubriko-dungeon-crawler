@@ -36,7 +36,6 @@ class DungeonViewActor(
     viewW: Float,
     viewH: Float,
     private val renderMode: () -> RenderMode,
-    private val atlas: DungeonAtlas? = null,
 ) : Actor, Visible {
 
     override val layerIndex = 0
@@ -61,13 +60,14 @@ class DungeonViewActor(
 
     override fun DrawScope.draw() {
         val mode = renderMode()
+        val texturedAtlas = (mode as? RenderMode.Textured)?.atlas
         // Pass 1: floor and ceiling — drawn before walls so walls always paint on top.
         // The occlusion-based culling already prevents floor/ceiling from occupying wall
         // pixels, but command order in the buffer would otherwise draw them over side walls.
-        if (mode != RenderMode.WIREFRAME) {
+        if (mode !is RenderMode.Wireframe) {
             for (cmd in drawCommands) {
                 if (cmd is DrawCommand.FloorCeilingBand) {
-                    if (mode == RenderMode.TEXTURED && atlas != null) drawFloorCeilingTextured(cmd)
+                    if (texturedAtlas != null) drawFloorCeilingTextured(cmd, texturedAtlas)
                     else drawFloorCeiling(cmd)
                 }
             }
@@ -75,8 +75,8 @@ class DungeonViewActor(
         // Pass 2: walls.
         for (cmd in drawCommands) {
             when (cmd) {
-                is DrawCommand.FrontStrip -> drawFrontStrip(cmd, mode)
-                is DrawCommand.SideStrip -> drawSideStrip(cmd, mode)
+                is DrawCommand.FrontStrip -> drawFrontStrip(cmd, mode, texturedAtlas)
+                is DrawCommand.SideStrip -> drawSideStrip(cmd, mode, texturedAtlas)
                 is DrawCommand.FloorCeilingBand -> {}
             }
         }
@@ -97,8 +97,7 @@ class DungeonViewActor(
         )
     }
 
-    private fun DrawScope.drawFloorCeilingTextured(cmd: DrawCommand.FloorCeilingBand) {
-        val a = atlas ?: return
+    private fun DrawScope.drawFloorCeilingTextured(cmd: DrawCommand.FloorCeilingBand, a: DungeonAtlas) {
 
         // Start from the sub-interval angular clip (xClipLeft/xClipRight) and expand outward
         // only to include the trapezoid's far corners (xFarLeft/xFarRight).
@@ -245,26 +244,25 @@ class DungeonViewActor(
         v[15] = 1f           - h21 * tileTop / ts / cmd.vNearFraction
     }
 
-    private fun DrawScope.drawFrontStrip(cmd: DrawCommand.FrontStrip, mode: RenderMode) {
+    private fun DrawScope.drawFrontStrip(cmd: DrawCommand.FrontStrip, mode: RenderMode, atlas: DungeonAtlas?) {
         val leftIsEdge  = cmd.xLeft  == cmd.xWallLeft
         val rightIsEdge = cmd.xRight == cmd.xWallRight
         when (mode) {
-            RenderMode.WIREFRAME -> {
-                drawLine(WIREFRAME_FRONT_COLOR, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), WIREFRAME_STROKE)
-                drawLine(WIREFRAME_FRONT_COLOR, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
-                if (leftIsEdge) drawLine(WIREFRAME_FRONT_COLOR, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), WIREFRAME_STROKE)
-                if (rightIsEdge) drawLine(WIREFRAME_FRONT_COLOR, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
+            is RenderMode.Wireframe -> {
+                drawLine(mode.frontColor, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), WIREFRAME_STROKE)
+                drawLine(mode.frontColor, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
+                if (leftIsEdge) drawLine(mode.frontColor, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), WIREFRAME_STROKE)
+                if (rightIsEdge) drawLine(mode.frontColor, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
             }
-            RenderMode.SOLID -> {
+            is RenderMode.Solid -> {
                 drawRect(color = cmd.color, topLeft = Offset(cmd.xLeft, cmd.yTop), size = Size(cmd.xRight - cmd.xLeft, cmd.yBottom - cmd.yTop))
                 drawLine(BORDER_COLOR, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), BORDER_STROKE)
                 drawLine(BORDER_COLOR, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), BORDER_STROKE)
                 if (leftIsEdge) drawLine(BORDER_COLOR, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), BORDER_STROKE)
                 if (rightIsEdge) drawLine(BORDER_COLOR, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), BORDER_STROKE)
             }
-            RenderMode.TEXTURED -> {
-                val a = atlas
-                if (a != null) {
+            is RenderMode.Textured -> {
+                if (atlas != null) {
                     // A partially-occluded front wall must show only the corresponding slice
                     // of the texture — not the full tile stretched to the visible sub-interval.
                     // Compute u_left/u_right as the fraction of [xLeft,xRight] within the
@@ -272,14 +270,14 @@ class DungeonViewActor(
                     val wallW  = cmd.xWallRight - cmd.xWallLeft
                     val uLeft  = if (wallW > 0f) (cmd.xLeft  - cmd.xWallLeft) / wallW else 0f
                     val uRight = if (wallW > 0f) (cmd.xRight - cmd.xWallLeft) / wallW else 1f
-                    val tileLeft = (cmd.tileIndex % a.cols) * a.tileSize
-                    val tileTop  = (cmd.tileIndex / a.cols) * a.tileSize
-                    val srcX = (tileLeft + uLeft  * a.tileSize).toInt()
-                    val srcW = ((uRight - uLeft) * a.tileSize).toInt().coerceAtLeast(1)
+                    val tileLeft = (cmd.tileIndex % atlas.cols) * atlas.tileSize
+                    val tileTop  = (cmd.tileIndex / atlas.cols) * atlas.tileSize
+                    val srcX = (tileLeft + uLeft  * atlas.tileSize).toInt()
+                    val srcW = ((uRight - uLeft) * atlas.tileSize).toInt().coerceAtLeast(1)
                     drawImage(
-                        image = a.image,
+                        image = atlas.image,
                         srcOffset = IntOffset(srcX, tileTop),
-                        srcSize = IntSize(srcW, a.tileSize),
+                        srcSize = IntSize(srcW, atlas.tileSize),
                         dstOffset = IntOffset(cmd.xLeft.toInt(), cmd.yTop.toInt()),
                         dstSize = IntSize(
                             (cmd.xRight - cmd.xLeft).toInt().coerceAtLeast(1),
@@ -307,18 +305,18 @@ class DungeonViewActor(
         }
     }
 
-    private fun DrawScope.drawSideStrip(cmd: DrawCommand.SideStrip, mode: RenderMode) {
+    private fun DrawScope.drawSideStrip(cmd: DrawCommand.SideStrip, mode: RenderMode, atlas: DungeonAtlas?) {
         val nearInClip = cmd.xNear in cmd.xClipLeft..cmd.xClipRight
         val farInClip  = cmd.xFar  in cmd.xClipLeft..cmd.xClipRight
         clipRect(left = cmd.xClipLeft, top = cmd.yNearTop, right = cmd.xClipRight, bottom = cmd.yNearBot) {
             when (mode) {
-                RenderMode.WIREFRAME -> {
-                    drawLine(WIREFRAME_SIDE_COLOR, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xFar, cmd.yFarTop), WIREFRAME_STROKE)
-                    drawLine(WIREFRAME_SIDE_COLOR, Offset(cmd.xNear, cmd.yNearBot), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
-                    if (nearInClip) drawLine(WIREFRAME_SIDE_COLOR, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), WIREFRAME_STROKE)
-                    if (farInClip) drawLine(WIREFRAME_SIDE_COLOR, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
+                is RenderMode.Wireframe -> {
+                    drawLine(mode.sideColor, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xFar, cmd.yFarTop), WIREFRAME_STROKE)
+                    drawLine(mode.sideColor, Offset(cmd.xNear, cmd.yNearBot), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
+                    if (nearInClip) drawLine(mode.sideColor, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), WIREFRAME_STROKE)
+                    if (farInClip) drawLine(mode.sideColor, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
                 }
-                RenderMode.SOLID -> {
+                is RenderMode.Solid -> {
                     trapezoidPath.reset()
                     trapezoidPath.moveTo(cmd.xNear, cmd.yNearTop)
                     trapezoidPath.lineTo(cmd.xNear, cmd.yNearBot)
@@ -331,9 +329,8 @@ class DungeonViewActor(
                     if (nearInClip) drawLine(BORDER_COLOR, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), BORDER_STROKE)
                     if (farInClip) drawLine(BORDER_COLOR, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), BORDER_STROKE)
                 }
-                RenderMode.TEXTURED -> {
-                    val a = atlas
-                    if (a != null) {
+                is RenderMode.Textured -> {
+                    if (atlas != null) {
                         // Perspective-correct texture mapping via canvas homography.
                         //
                         // Instead of triangles with affine UV interpolation (which creates
@@ -348,7 +345,7 @@ class DungeonViewActor(
                         // right at xFar), which means h=0 in the quad-to-unit-square formula
                         // and the homography reduces to a simple closed form — no linear
                         // system solver required.
-                        fillPerspectiveMatrix(cmd, a)
+                        fillPerspectiveMatrix(cmd, atlas)
                         trapezoidPath.reset()
                         trapezoidPath.moveTo(cmd.xNear, cmd.yNearTop)
                         trapezoidPath.lineTo(cmd.xNear, cmd.yNearBot)
@@ -363,7 +360,7 @@ class DungeonViewActor(
                             // tile area don't bleed past the wall edges
                             canvas.clipPath(trapezoidPath)
                             canvas.concat(perspectiveMatrix)
-                            canvas.drawImage(a.image, Offset.Zero, imagePaint)
+                            canvas.drawImage(atlas.image, Offset.Zero, imagePaint)
                             canvas.restore()
                         }
                         imagePaint.colorFilter = null
@@ -459,9 +456,7 @@ class DungeonViewActor(
     }
 
     private companion object {
-        val WIREFRAME_FRONT_COLOR = Color(0xFF6B4F3B)
-        val WIREFRAME_SIDE_COLOR  = Color(0xFF4A3728)
-        val BORDER_COLOR          = Color(0f, 0f, 0f, 0.4f)
+        val BORDER_COLOR = Color(0f, 0f, 0f, 0.4f)
         const val WIREFRAME_STROKE = 4f
         const val BORDER_STROKE    = 2f
 

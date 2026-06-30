@@ -28,12 +28,8 @@ class DungeonRendererManager(
     // Fraction of the viewport height that a wall at depth=1 occupies (0 < scale ≤ 1).
     // Values below 1 leave floor and ceiling strips visible; 1.0 fills the full viewport.
     val wallHeightScale: Float = 0.8f,
-    // Switches between solid-colour, atlas-textured, and wireframe rendering.
-    renderMode: RenderMode = RenderMode.SOLID,
-    // Colour palette for walls, floor, and ceiling. Provide a custom instance to re-theme.
-    val colorTheme: DungeonColorTheme = DungeonColorTheme(),
-    // Texture atlas for RenderMode.TEXTURED. Without one, TEXTURED falls back to SOLID.
-    private val atlas: DungeonAtlas? = null,
+    // Controls rendering style and carries mode-specific config (colours, atlas, etc.).
+    renderMode: RenderMode = RenderMode.Solid(),
     // When non-null, called once per wall strip to produce a debug label overlay.
     // Receives the label text and true for a side wall / false for a front wall.
     private val debugLabelProvider: ((text: String, isSideWall: Boolean) -> TextLayoutResult?)? = null,
@@ -101,7 +97,7 @@ class DungeonRendererManager(
 
         if (viewChanged || dungeonViewActor == null) {
             dungeonViewActor?.let { actorManager.remove(it) }
-            val actor = DungeonViewActor(viewW, viewH, renderMode = { renderMode }, atlas = atlas)
+            val actor = DungeonViewActor(viewW, viewH, renderMode = { renderMode })
             dungeonViewActor = actor
             actorManager.add(actor)
         }
@@ -225,6 +221,12 @@ class DungeonRendererManager(
         newFrontWallCellsBuffer.clear()
         newSideWallCellsBuffer.clear()
         drawCommandsBuffer.clear()
+        val colorTheme = when (val m = renderMode) {
+            is RenderMode.Solid -> m.colorTheme
+            is RenderMode.Textured -> m.colorTheme
+            is RenderMode.Wireframe -> DungeonColorTheme()  // colors unused in wireframe draw
+        }
+        val atlas = (renderMode as? RenderMode.Textured)?.atlas
         val frontWallTile = atlas?.frontWallTile ?: 0
         val sideWallTile  = atlas?.sideWallTile  ?: 0
         val floorTile     = atlas?.floorTile      ?: 0
