@@ -5,8 +5,10 @@ import androidx.compose.ui.graphics.Color
 sealed class RenderMode {
 
     data class Wireframe(
-        val frontColor: Color = Color(0xFF6B4F3B),
-        val sideColor: Color = Color(0xFF4A3728),
+        val frontColor: Color = Color(0xFFFFBB66),  // bright amber — walls
+        val sideColor: Color = frontColor,
+        val floorColor: Color = Color(0xFF66BB66),  // bright green — floor
+        val ceilColor: Color = Color(0xFF6688FF),   // bright blue — ceiling
     ) : RenderMode()
 
     data class Solid(

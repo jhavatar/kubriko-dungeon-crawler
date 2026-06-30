@@ -64,11 +64,12 @@ class DungeonViewActor(
         // Pass 1: floor and ceiling — drawn before walls so walls always paint on top.
         // The occlusion-based culling already prevents floor/ceiling from occupying wall
         // pixels, but command order in the buffer would otherwise draw them over side walls.
-        if (mode !is RenderMode.Wireframe) {
-            for (cmd in drawCommands) {
-                if (cmd is DrawCommand.FloorCeilingBand) {
-                    if (texturedAtlas != null) drawFloorCeilingTextured(cmd, texturedAtlas)
-                    else drawFloorCeiling(cmd)
+        for (cmd in drawCommands) {
+            if (cmd is DrawCommand.FloorCeilingBand) {
+                when {
+                    texturedAtlas != null -> drawFloorCeilingTextured(cmd, texturedAtlas)
+                    mode is RenderMode.Wireframe -> drawFloorCeilingWireframe(cmd)
+                    else -> drawFloorCeiling(cmd)
                 }
             }
         }
@@ -95,6 +96,27 @@ class DungeonViewActor(
             topLeft = Offset(cmd.xClipLeft, size.height - cmd.yFloorClipBottom),
             size = Size(bandW, bandH),
         )
+    }
+
+    private fun DrawScope.drawFloorCeilingWireframe(cmd: DrawCommand.FloorCeilingBand) {
+        val floorMid = (cmd.floorNearBrightness + cmd.floorFarBrightness) / 2f
+        val ceilMid  = (cmd.ceilNearBrightness  + cmd.ceilFarBrightness)  / 2f
+        val fc = cmd.floorColor.dim(floorMid)
+        val cc = cmd.ceilColor.dim(ceilMid)
+        clipRect(left = cmd.xClipLeft, right = cmd.xClipRight, top = 0f, bottom = size.height) {
+            // Floor trapezoid: far edge at yFloorClipTop (horizon), near edge at yFloorClipBottom (screen bottom).
+            drawLine(fc, Offset(cmd.xFarLeft,  cmd.yFloorClipTop),    Offset(cmd.xFarRight,  cmd.yFloorClipTop),    WIREFRAME_STROKE)
+            drawLine(fc, Offset(cmd.xNearLeft, cmd.yFloorClipBottom), Offset(cmd.xNearRight, cmd.yFloorClipBottom), WIREFRAME_STROKE)
+            drawLine(fc, Offset(cmd.xFarLeft,  cmd.yFloorClipTop),    Offset(cmd.xNearLeft,  cmd.yFloorClipBottom), WIREFRAME_STROKE)
+            drawLine(fc, Offset(cmd.xFarRight, cmd.yFloorClipTop),    Offset(cmd.xNearRight, cmd.yFloorClipBottom), WIREFRAME_STROKE)
+            // Ceiling: mirror of floor around the horizon.
+            val ceilTop    = size.height - cmd.yFloorClipBottom
+            val ceilBottom = size.height - cmd.yFloorClipTop
+            drawLine(cc, Offset(cmd.xNearLeft,  ceilTop),    Offset(cmd.xNearRight, ceilTop),    WIREFRAME_STROKE)
+            drawLine(cc, Offset(cmd.xFarLeft,   ceilBottom), Offset(cmd.xFarRight,  ceilBottom), WIREFRAME_STROKE)
+            drawLine(cc, Offset(cmd.xNearLeft,  ceilTop),    Offset(cmd.xFarLeft,   ceilBottom), WIREFRAME_STROKE)
+            drawLine(cc, Offset(cmd.xNearRight, ceilTop),    Offset(cmd.xFarRight,  ceilBottom), WIREFRAME_STROKE)
+        }
     }
 
     private fun DrawScope.drawFloorCeilingTextured(cmd: DrawCommand.FloorCeilingBand, a: DungeonAtlas) {
@@ -249,10 +271,11 @@ class DungeonViewActor(
         val rightIsEdge = cmd.xRight == cmd.xWallRight
         when (mode) {
             is RenderMode.Wireframe -> {
-                drawLine(mode.frontColor, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), WIREFRAME_STROKE)
-                drawLine(mode.frontColor, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
-                if (leftIsEdge) drawLine(mode.frontColor, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), WIREFRAME_STROKE)
-                if (rightIsEdge) drawLine(mode.frontColor, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
+                val c = mode.frontColor.dim(cmd.brightness)
+                drawLine(c, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), WIREFRAME_STROKE)
+                drawLine(c, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
+                if (leftIsEdge) drawLine(c, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), WIREFRAME_STROKE)
+                if (rightIsEdge) drawLine(c, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
             }
             is RenderMode.Solid -> {
                 drawRect(color = cmd.color, topLeft = Offset(cmd.xLeft, cmd.yTop), size = Size(cmd.xRight - cmd.xLeft, cmd.yBottom - cmd.yTop))
@@ -311,10 +334,11 @@ class DungeonViewActor(
         clipRect(left = cmd.xClipLeft, top = cmd.yNearTop, right = cmd.xClipRight, bottom = cmd.yNearBot) {
             when (mode) {
                 is RenderMode.Wireframe -> {
-                    drawLine(mode.sideColor, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xFar, cmd.yFarTop), WIREFRAME_STROKE)
-                    drawLine(mode.sideColor, Offset(cmd.xNear, cmd.yNearBot), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
-                    if (nearInClip) drawLine(mode.sideColor, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), WIREFRAME_STROKE)
-                    if (farInClip) drawLine(mode.sideColor, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
+                    val c = mode.sideColor.dim(cmd.brightness)
+                    drawLine(c, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xFar, cmd.yFarTop), WIREFRAME_STROKE)
+                    drawLine(c, Offset(cmd.xNear, cmd.yNearBot), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
+                    if (nearInClip) drawLine(c, Offset(cmd.xNear, cmd.yNearTop), Offset(cmd.xNear, cmd.yNearBot), WIREFRAME_STROKE)
+                    if (farInClip) drawLine(c, Offset(cmd.xFar, cmd.yFarTop), Offset(cmd.xFar, cmd.yFarBot), WIREFRAME_STROKE)
                 }
                 is RenderMode.Solid -> {
                     trapezoidPath.reset()
@@ -459,6 +483,8 @@ class DungeonViewActor(
         val BORDER_COLOR = Color(0f, 0f, 0f, 0.4f)
         const val WIREFRAME_STROKE = 4f
         const val BORDER_STROKE    = 2f
+
+        fun Color.dim(b: Float) = Color(red * b, green * b, blue * b, alpha)
 
         // Grayscale multiply filter: scales RGB by [b,b,b] without touching alpha.
         // Walls stay fully opaque while dimming by depth — no colour cast, no transparency.

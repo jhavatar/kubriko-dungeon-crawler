@@ -42,7 +42,7 @@ class DungeonRendererManager(
 ) {
     // exp(-TORCH_K * dist) — torch brightness falls off exponentially with Euclidean distance.
     // TORCH_K controls the falloff rate; MIN_BRIGHTNESS prevents surfaces going fully black.
-    private fun torchBrightness(dist: Float) = exp(-TORCH_K * dist).coerceAtLeast(MIN_BRIGHTNESS)
+    private fun torchBrightness(dist: Float) = exp(-TORCH_K * (dist - 1f)).coerceAtLeast(MIN_BRIGHTNESS)
 
     private val tileMapManager by manager<TileMapManager>()
     private val actorManager by manager<ActorManager>()
@@ -290,6 +290,10 @@ class DungeonRendererManager(
                 val nCellY = viewer.cellY + lat * right.dy
                 if (tileMap.cellTypeAt(nCellX, nCellY) == CellType.WALL) continue
 
+                val nearSubIntervals = if (renderMode is RenderMode.Wireframe)
+                    occlusionBuffer.subtract(Interval(angleLeft, angleRight))
+                else listOf(Interval(angleLeft, angleRight))
+                if (nearSubIntervals.isEmpty()) continue
                 emitFloorCeiling(
                     angleToX = angleToX,
                     viewW = viewW,
@@ -299,9 +303,9 @@ class DungeonRendererManager(
                     xNearRight = latRight / wallHeightScale * angleToX + viewW / 2f,
                     xFarLeft   = latLeft  * angleToX + viewW / 2f,
                     xFarRight  = latRight * angleToX + viewW / 2f,
-                    subIntervals = listOf(Interval(angleLeft, angleRight)),
-                    floorColor = colorTheme.floorColor(torchBrightness(0.5f)),
-                    ceilColor = colorTheme.ceilColor(torchBrightness(0.5f)),
+                    subIntervals = nearSubIntervals,
+                    floorColor = (renderMode as? RenderMode.Wireframe)?.floorColor ?: colorTheme.floorColor(torchBrightness(0.5f)),
+                    ceilColor = (renderMode as? RenderMode.Wireframe)?.ceilColor ?: colorTheme.ceilColor(torchBrightness(0.5f)),
                     floorTileIndex = floorTile,
                     ceilTileIndex = ceilTile,
                     vNearFraction = 1f - wallHeightScale,
@@ -541,6 +545,10 @@ class DungeonRendererManager(
                 val fcXNearRight = latRight / D.toFloat() * angleToX + viewW / 2f
                 val fcXFarLeft   = latLeft  / (D + 1).toFloat() * angleToX + viewW / 2f
                 val fcXFarRight  = latRight / (D + 1).toFloat() * angleToX + viewW / 2f
+                val fcSubIntervals = if (renderMode is RenderMode.Wireframe)
+                    occlusionBuffer.subtract(Interval(angleLeft, angleRight))
+                else listOf(Interval(angleLeft, angleRight))
+                if (fcSubIntervals.isEmpty()) continue
                 emitFloorCeiling(
                     angleToX = angleToX,
                     viewW = viewW,
@@ -550,9 +558,9 @@ class DungeonRendererManager(
                     xNearRight = fcXNearRight,
                     xFarLeft   = fcXFarLeft,
                     xFarRight  = fcXFarRight,
-                    subIntervals = listOf(Interval(angleLeft, angleRight)),
-                    floorColor = colorTheme.floorColor(torchBrightness(D.toFloat() + 0.5f)),
-                    ceilColor = colorTheme.ceilColor(torchBrightness(D.toFloat() + 0.5f)),
+                    subIntervals = fcSubIntervals,
+                    floorColor = (renderMode as? RenderMode.Wireframe)?.floorColor ?: colorTheme.floorColor(torchBrightness(D.toFloat() + 0.5f)),
+                    ceilColor = (renderMode as? RenderMode.Wireframe)?.ceilColor ?: colorTheme.ceilColor(torchBrightness(D.toFloat() + 0.5f)),
                     floorTileIndex = floorTile,
                     ceilTileIndex = ceilTile,
                     floorNearBrightness = torchBrightness(hypot(D.toFloat(), lat.toFloat())),
@@ -576,18 +584,19 @@ class DungeonRendererManager(
     }
 
     private companion object {
-        // Exponential torch falloff: brightness = exp(-TORCH_K * hypot(depth, lat))
+        // Exponential torch falloff: brightness = exp(-TORCH_K * (hypot(depth, lat) - 1))
+        // Normalised at dist=1 so the nearest wall (D=1, lat=0) is always full brightness (1.0).
         // TORCH_K: smaller = wider torch radius / brighter dungeon; larger = tighter / darker.
         // MIN_BRIGHTNESS: ambient floor — raise for a dimly-lit dungeon, lower for starker drop.
         //
-        // Reference brightness at TORCH_K=0.5, viewDistance=4:
-        //   dist  1.0  (D=1, lat=0)  →  0.61
-        //   dist  1.4  (D=1, lat=1)  →  0.50
-        //   dist  2.0  (D=2, lat=0)  →  0.37
-        //   dist  2.8  (D=2, lat=2)  →  0.25
-        //   dist  4.0  (D=4, lat=0)  →  0.14  (clamped to MIN_BRIGHTNESS)
+        // Reference brightness at TORCH_K=0.4, viewDistance=4:
+        //   dist  1.0  (D=1, lat=0)  →  1.00
+        //   dist  1.4  (D=1, lat=1)  →  0.85
+        //   dist  2.0  (D=2, lat=0)  →  0.67
+        //   dist  2.8  (D=2, lat=2)  →  0.49
+        //   dist  4.0  (D=4, lat=0)  →  0.30
         const val TORCH_K = 0.4f
-        const val MIN_BRIGHTNESS = 0.15f
+        const val MIN_BRIGHTNESS = 0.2f
     }
 
     // Returns true when the cell slot [latLeft, latRight] has any angular overlap with the visible
