@@ -43,6 +43,13 @@ sealed class DrawCommand {
         // 1.0 for depth-D bands (full tile per cell). For the near band: (1−wallHeightScale),
         // because only the depth 0.8→1 portion of the player's cell (depth 0→1) is on screen.
         val vNearFraction: Float = 1f,
+        // Near/far brightness for the TEXTURED-mode gradient (applied via BlendMode.Multiply).
+        // "Near" = player-side edge; "far" = horizon-side edge. A continuous gradient is drawn
+        // between them so adjacent depth bands connect seamlessly.
+        val floorNearBrightness: Float = 1f,
+        val floorFarBrightness: Float = 1f,
+        val ceilNearBrightness: Float = 1f,
+        val ceilFarBrightness: Float = 1f,
     ) : DrawCommand()
 
     // A visible sub-interval strip of a front-facing wall.
@@ -59,6 +66,8 @@ sealed class DrawCommand {
         val xWallLeft: Float,
         val xWallRight: Float,
         val tileIndex: Int = 0,
+        // 0..1 brightness used in TEXTURED mode (applied via grayscale ColorFilter.Multiply).
+        val brightness: Float = 1f,
         val debugLabel: TextLayoutResult? = null,
     ) : DrawCommand()
 
@@ -76,10 +85,8 @@ sealed class DrawCommand {
         val xClipRight: Float,
         val color: Color,
         val tileIndex: Int = 0,
-        val shadeFactor: Float = 1f,
-        // Depths in scene units — used by TEXTURED mode for perspective-correct UV interpolation.
-        val zNear: Float = 1f,
-        val zFar: Float = 2f,
+        // 0..1 brightness used in TEXTURED mode (applied via grayscale ColorFilter.Multiply).
+        val brightness: Float = 1f,
         val debugLabel: TextLayoutResult? = null,
     ) : DrawCommand()
 }

@@ -2,7 +2,10 @@ package com.chthonic.dungeoncrawler.renderer
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
@@ -126,6 +129,20 @@ class DungeonViewActor(
                 canvas.drawImage(a.image, Offset.Zero, imagePaint)
                 canvas.restore()
             }
+            // Brightness gradient: far edge (top, toward horizon) = dim; near edge (bottom) = bright.
+            // Clipped to the trapezoid path so adjacent lateral cells don't affect each other.
+            drawPath(
+                path = trapezoidPath,
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(cmd.floorFarBrightness, cmd.floorFarBrightness, cmd.floorFarBrightness),
+                        Color(cmd.floorNearBrightness, cmd.floorNearBrightness, cmd.floorNearBrightness),
+                    ),
+                    startY = cmd.yFloorClipTop,
+                    endY = cmd.yFloorClipBottom,
+                ),
+                blendMode = BlendMode.Multiply,
+            )
         }
 
         // Ceiling — mirror of floor around the horizon.
@@ -147,6 +164,19 @@ class DungeonViewActor(
                 canvas.drawImage(a.image, Offset.Zero, imagePaint)
                 canvas.restore()
             }
+            // Ceiling near edge is at ceilTop (top of screen), far edge at ceilBottom (horizon).
+            drawPath(
+                path = trapezoidPath,
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(cmd.ceilNearBrightness, cmd.ceilNearBrightness, cmd.ceilNearBrightness),
+                        Color(cmd.ceilFarBrightness, cmd.ceilFarBrightness, cmd.ceilFarBrightness),
+                    ),
+                    startY = ceilTop,
+                    endY = ceilBottom,
+                ),
+                blendMode = BlendMode.Multiply,
+            )
         }
     }
 
@@ -255,6 +285,7 @@ class DungeonViewActor(
                             (cmd.xRight - cmd.xLeft).toInt().coerceAtLeast(1),
                             (cmd.yBottom - cmd.yTop).toInt().coerceAtLeast(1),
                         ),
+                        colorFilter = brightnessFilter(cmd.brightness),
                     )
                 } else {
                     drawRect(color = cmd.color, topLeft = Offset(cmd.xLeft, cmd.yTop), size = Size(cmd.xRight - cmd.xLeft, cmd.yBottom - cmd.yTop))
@@ -324,6 +355,7 @@ class DungeonViewActor(
                         trapezoidPath.lineTo(cmd.xFar,  cmd.yFarBot)
                         trapezoidPath.lineTo(cmd.xFar,  cmd.yFarTop)
                         trapezoidPath.close()
+                        imagePaint.colorFilter = brightnessFilter(cmd.brightness)
                         drawIntoCanvas { canvas ->
                             canvas.save()
                             // angular-interval clip already applied by outer clipRect;
@@ -334,6 +366,7 @@ class DungeonViewActor(
                             canvas.drawImage(a.image, Offset.Zero, imagePaint)
                             canvas.restore()
                         }
+                        imagePaint.colorFilter = null
                     } else {
                         trapezoidPath.reset()
                         trapezoidPath.moveTo(cmd.xNear, cmd.yNearTop)
@@ -431,5 +464,9 @@ class DungeonViewActor(
         val BORDER_COLOR          = Color(0f, 0f, 0f, 0.4f)
         const val WIREFRAME_STROKE = 4f
         const val BORDER_STROKE    = 2f
+
+        // Grayscale multiply filter: scales RGB by [b,b,b] without touching alpha.
+        // Walls stay fully opaque while dimming by depth — no colour cast, no transparency.
+        fun brightnessFilter(b: Float) = ColorFilter.tint(Color(b, b, b), BlendMode.Multiply)
     }
 }

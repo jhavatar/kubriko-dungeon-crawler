@@ -12,6 +12,8 @@ import com.pandulapeter.kubriko.manager.ViewportManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.exp
+import kotlin.math.hypot
 import kotlin.time.measureTime
 
 class DungeonRendererManager(
@@ -42,6 +44,10 @@ class DungeonRendererManager(
     instanceNameForLogging = instanceNameForLogging,
     classNameForLogging = DungeonRendererManager::class.simpleName,
 ) {
+    // exp(-TORCH_K * dist) — torch brightness falls off exponentially with Euclidean distance.
+    // TORCH_K controls the falloff rate; MIN_BRIGHTNESS prevents surfaces going fully black.
+    private fun torchBrightness(dist: Float) = exp(-TORCH_K * dist).coerceAtLeast(MIN_BRIGHTNESS)
+
     private val tileMapManager by manager<TileMapManager>()
     private val actorManager by manager<ActorManager>()
     private val viewportManager by manager<ViewportManager>()
@@ -297,6 +303,10 @@ class DungeonRendererManager(
                     floorTileIndex = floorTile,
                     ceilTileIndex = ceilTile,
                     vNearFraction = 1f - wallHeightScale,
+                    floorNearBrightness = 1f,
+                    floorFarBrightness = torchBrightness(hypot(1f, lat.toFloat())),
+                    ceilNearBrightness = 1f,
+                    ceilFarBrightness = torchBrightness(hypot(1f, lat.toFloat())),
                 )
             }
         }
@@ -397,9 +407,7 @@ class DungeonRendererManager(
                             xClipRight = hi.toDsX(),
                             color = color,
                             tileIndex = sideWallTile,
-                            shadeFactor = colorTheme.sideWallShadow,
-                            zNear = maxOf(sideDepth, 1).toFloat(),
-                            zFar = D.toFloat(),
+                            brightness = torchBrightness(hypot(sideDepth.toFloat() + 0.5f, xB)) * colorTheme.sideWallShadow,
                             debugLabel = if (idx == 0) debugLabelProvider?.invoke(
                                 "$k,$sideDepth",
                                 true
@@ -456,12 +464,14 @@ class DungeonRendererManager(
                     // clips one edge of the cell (e.g. lat=±latMax at D < viewDistance).
                     val xWallLeft_ds  = (latLeft  / D).toDsX()
                     val xWallRight_ds = (latRight / D).toDsX()
+                    val frontBrightness = torchBrightness(hypot(D.toFloat(), lat.toFloat()))
                     subIntervals.forEachIndexed { idx, (lo, hi) ->
                         drawCommandsBuffer.add(
                             DrawCommand.FrontStrip(
                                 xLeft = lo.toDsX(),
                                 xRight = hi.toDsX(),
                                 tileIndex = frontWallTile,
+                                brightness = frontBrightness,
                                 yTop = yTop,
                                 yBottom = yBottom,
                                 color = color,
@@ -543,6 +553,10 @@ class DungeonRendererManager(
                     ceilColor = colorTheme.ceilColor(D, viewDistance),
                     floorTileIndex = floorTile,
                     ceilTileIndex = ceilTile,
+                    floorNearBrightness = torchBrightness(hypot(D.toFloat(), lat.toFloat())),
+                    floorFarBrightness  = torchBrightness(hypot((D + 1).toFloat(), lat.toFloat())),
+                    ceilNearBrightness  = torchBrightness(hypot(D.toFloat(), lat.toFloat())),
+                    ceilFarBrightness   = torchBrightness(hypot((D + 1).toFloat(), lat.toFloat())),
                 )
             }
 
@@ -557,6 +571,21 @@ class DungeonRendererManager(
             newSideWallCellsBuffer.toMap()
 
         return drawCommandsBuffer
+    }
+
+    private companion object {
+        // Exponential torch falloff: brightness = exp(-TORCH_K * hypot(depth, lat))
+        // TORCH_K: smaller = wider torch radius / brighter dungeon; larger = tighter / darker.
+        // MIN_BRIGHTNESS: ambient floor — raise for a dimly-lit dungeon, lower for starker drop.
+        //
+        // Reference brightness at TORCH_K=0.5, viewDistance=4:
+        //   dist  1.0  (D=1, lat=0)  →  0.61
+        //   dist  1.4  (D=1, lat=1)  →  0.50
+        //   dist  2.0  (D=2, lat=0)  →  0.37
+        //   dist  2.8  (D=2, lat=2)  →  0.25
+        //   dist  4.0  (D=4, lat=0)  →  0.14  (clamped to MIN_BRIGHTNESS)
+        const val TORCH_K = 0.4f
+        const val MIN_BRIGHTNESS = 0.15f
     }
 
     // Returns true when the cell slot [latLeft, latRight] has any angular overlap with the visible
@@ -589,6 +618,10 @@ class DungeonRendererManager(
         floorTileIndex: Int = 0,
         ceilTileIndex: Int = 0,
         vNearFraction: Float = 1f,
+        floorNearBrightness: Float = 1f,
+        floorFarBrightness: Float = 1f,
+        ceilNearBrightness: Float = 1f,
+        ceilFarBrightness: Float = 1f,
     ) {
         for ((lo, hi) in subIntervals) {
             drawCommandsBuffer.add(
@@ -606,6 +639,10 @@ class DungeonRendererManager(
                     floorTileIndex = floorTileIndex,
                     ceilTileIndex = ceilTileIndex,
                     vNearFraction = vNearFraction,
+                    floorNearBrightness = floorNearBrightness,
+                    floorFarBrightness = floorFarBrightness,
+                    ceilNearBrightness = ceilNearBrightness,
+                    ceilFarBrightness = ceilFarBrightness,
                 )
             )
         }
