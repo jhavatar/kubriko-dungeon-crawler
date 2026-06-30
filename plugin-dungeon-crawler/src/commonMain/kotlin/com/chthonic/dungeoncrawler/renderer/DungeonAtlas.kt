@@ -1,12 +1,10 @@
 package com.chthonic.dungeoncrawler.renderer
 
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 
 // Texture atlas for the dungeon view. All tiles must be the same size, arranged in a
-// uniform grid with [cols] columns. Pass a DungeonAtlas to DungeonRendererManager to
-// enable RenderMode.TEXTURED; without one, TEXTURED falls back to SOLID.
+// uniform grid with [cols] columns. Canonical tile ordering: wall=0, floor=1, ceiling=2.
+// Pass a DungeonAtlas to RenderMode.Textured to enable textured rendering.
 data class DungeonAtlas(
     val image: ImageBitmap,
     val tileSize: Int,
@@ -14,12 +12,13 @@ data class DungeonAtlas(
     val frontWallTile: Int = 0,
     val sideWallTile: Int = 0,
     val floorTile: Int = 1,
-    val ceilTile: Int = 0,
+    val ceilTile: Int = 2,
 ) {
-    fun srcOffset(tileIndex: Int) = IntOffset(
-        x = (tileIndex % cols) * tileSize,
-        y = (tileIndex / cols) * tileSize,
-    )
-
-    fun srcSize() = IntSize(tileSize, tileSize)
+    init {
+        val maxIndex = (image.width / tileSize) * (image.height / tileSize) - 1
+        require(listOf(frontWallTile, sideWallTile, floorTile, ceilTile).all { it in 0..maxIndex }) {
+            "Tile index out of range (atlas has ${maxIndex + 1} tiles): " +
+                "frontWall=$frontWallTile, sideWall=$sideWallTile, floor=$floorTile, ceil=$ceilTile"
+        }
+    }
 }
