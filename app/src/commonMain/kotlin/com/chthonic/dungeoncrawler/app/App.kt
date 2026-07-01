@@ -2,7 +2,9 @@ package com.chthonic.dungeoncrawler.app
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -129,28 +131,43 @@ fun DungeonCrawlerApp() {
 
     val frontWallCells by dungeonRenderer.frontWallCells.collectAsState()
     val sideWallCells by dungeonRenderer.sideWallCells.collectAsState()
+    val pressedActions by playerManager.pressedActions.collectAsState()
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        KubrikoViewport(
-            kubriko = kubriko,
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            KubrikoViewport(
+                kubriko = kubriko,
+                modifier = Modifier
+                    .fillMaxSize(0.75f)
+                    .align(Alignment.Center)
+                    .border(2.dp, Color(0xFF8B6B52)),
+            )
+            MinimapOverlay(
+                tileMap = tileMapManager.tileMap,
+                cellX = viewerSnapshot.cellX,
+                cellY = viewerSnapshot.cellY,
+                facing = viewerSnapshot.facing,
+                fovWidth = dungeonRenderer.fovWidth,
+                viewDistance = dungeonRenderer.viewDistance,
+                frontWallCells = frontWallCells,
+                sideWallCells = sideWallCells,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(150.dp),
+            )
+        }
+        NavigationControls(
+            onTurnLeft = playerManager::turnLeft,
+            onMoveForward = playerManager::moveForward,
+            onTurnRight = playerManager::turnRight,
+            onStrafeLeft = playerManager::strafeLeft,
+            onMoveBackward = playerManager::moveBackward,
+            onStrafeRight = playerManager::strafeRight,
+            pressedActions = pressedActions,
             modifier = Modifier
-                .fillMaxSize(0.75f)
-                .align(Alignment.Center)
-                .border(2.dp, Color(0xFF8B6B52)),
-        )
-        MinimapOverlay(
-            tileMap = tileMapManager.tileMap,
-            cellX = viewerSnapshot.cellX,
-            cellY = viewerSnapshot.cellY,
-            facing = viewerSnapshot.facing,
-            fovWidth = dungeonRenderer.fovWidth,
-            viewDistance = dungeonRenderer.viewDistance,
-            frontWallCells = frontWallCells,
-            sideWallCells = sideWallCells,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp)
-                .size(150.dp),
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
         )
     }
 }
