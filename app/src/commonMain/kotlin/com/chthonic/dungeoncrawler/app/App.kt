@@ -1,12 +1,22 @@
 package com.chthonic.dungeoncrawler.app
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -31,6 +41,7 @@ import com.chthonic.dungeoncrawler.tilemap.TileMap
 import com.chthonic.dungeoncrawler.tilemap.TileMapManager
 import com.pandulapeter.kubriko.Kubriko
 import com.pandulapeter.kubriko.KubrikoViewport
+import com.pandulapeter.kubriko.helpers.extensions.sceneUnit
 import com.pandulapeter.kubriko.keyboardInput.KeyboardInputManager
 import com.pandulapeter.kubriko.logger.Logger
 import com.pandulapeter.kubriko.manager.ViewportManager
@@ -119,7 +130,15 @@ fun DungeonCrawlerApp() {
             dungeonRenderer,
             playerManager,
             KeyboardInputManager.newInstance(),
-            ViewportManager.newInstance(),
+            ViewportManager.newInstance(
+                // Keeps the dungeon view's aspect ratio identical across desktop, Android, web,
+                // and iOS regardless of window/screen shape — Kubriko letterboxes the rest itself
+                // rather than us approximating it with a fillMaxSize(fraction) hack.
+                aspectRatioMode = ViewportManager.AspectRatioMode.Fixed(
+                    ratio = 3f / 2f,
+                    width = 800f.sceneUnit,
+                ),
+            ),
             instanceNameForLogging = "DungeonCrawlerPoc",
         )
     }
@@ -133,15 +152,24 @@ fun DungeonCrawlerApp() {
     val sideWallCells by dungeonRenderer.sideWallCells.collectAsState()
     val pressedActions by playerManager.pressedActions.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            KubrikoViewport(
-                kubriko = kubriko,
-                modifier = Modifier
-                    .fillMaxSize(0.75f)
-                    .align(Alignment.Center)
-                    .border(2.dp, Color(0xFF8B6B52)),
-            )
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF1A1208))
+            .safeDrawingPadding()
+            .padding(SCREEN_EDGE_PADDING),
+    ) {
+        val viewport: @Composable (Modifier) -> Unit = { viewportModifier ->
+            Box(modifier = viewportModifier) {
+                KubrikoViewport(
+                    kubriko = kubriko,
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .border(2.dp, Color(0xFF8B6B52)),
+                )
+            }
+        }
+        val minimap: @Composable (Modifier) -> Unit = { minimapModifier ->
             MinimapOverlay(
                 tileMap = tileMapManager.tileMap,
                 cellX = viewerSnapshot.cellX,
@@ -151,23 +179,86 @@ fun DungeonCrawlerApp() {
                 viewDistance = dungeonRenderer.viewDistance,
                 frontWallCells = frontWallCells,
                 sideWallCells = sideWallCells,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(150.dp),
+                // Callers always give this the same weight/fillMax modifiers as the nav button
+                // grid, so it always matches the grid's overall footprint exactly.
+                modifier = minimapModifier,
             )
         }
-        NavigationControls(
-            onTurnLeft = playerManager::turnLeft,
-            onMoveForward = playerManager::moveForward,
-            onTurnRight = playerManager::turnRight,
-            onStrafeLeft = playerManager::strafeLeft,
-            onMoveBackward = playerManager::moveBackward,
-            onStrafeRight = playerManager::strafeRight,
-            pressedActions = pressedActions,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp),
-        )
+        val navigationControls: @Composable (Modifier) -> Unit = { navModifier ->
+            NavigationControls(
+                onTurnLeft = playerManager::turnLeft,
+                onMoveForward = playerManager::moveForward,
+                onTurnRight = playerManager::turnRight,
+                onStrafeLeft = playerManager::strafeLeft,
+                onMoveBackward = playerManager::moveBackward,
+                onStrafeRight = playerManager::strafeRight,
+                pressedActions = pressedActions,
+                modifier = navModifier,
+            )
+        }
+
+        // Unlike the viewport (which keeps growing via its own weight(1f) + Kubriko's internal
+        // AspectRatioMode.Fixed letterboxing to fill whatever space it's given), the minimap and
+        // nav grid are capped at PANEL_MAX_SIZE — past that cap, extra window space just goes to
+        // the viewport instead of the panel growing further.
+        if (maxWidth > maxHeight) {
+            // Landscape: minimap+grid stacked in a capped-width column beside the viewport, a
+            // fixed gap between them, vertically centered next to the viewport.
+            Row(modifier = Modifier.fillMaxSize()) {
+                viewport(Modifier.weight(1f).fillMaxHeight().widthIn(min = VIEWPORT_MIN_SIZE))
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .padding(start = PANEL_GAP),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val panelSize = minOf(maxWidth, (maxHeight - PANEL_GAP) / 2)
+                        .coerceIn(PANEL_MIN_SIZE, PANEL_MAX_SIZE)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        minimap(Modifier.size(panelSize))
+                        Spacer(modifier = Modifier.height(PANEL_GAP))
+                        navigationControls(Modifier.size(panelSize))
+                    }
+                }
+            }
+        } else {
+            // Portrait: nav grid (bottom-left) and minimap (bottom-right) side by side below the
+            // viewport, a fixed gap between them, the pair centered under the viewport.
+            Column(modifier = Modifier.fillMaxSize()) {
+                viewport(Modifier.weight(1f).fillMaxWidth().heightIn(min = VIEWPORT_MIN_SIZE))
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = PANEL_GAP),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val panelSize = minOf((maxWidth - PANEL_GAP) / 2, maxHeight)
+                        .coerceIn(PANEL_MIN_SIZE, PANEL_MAX_SIZE)
+                    Row {
+                        navigationControls(Modifier.size(panelSize))
+                        Spacer(modifier = Modifier.width(PANEL_GAP))
+                        minimap(Modifier.size(panelSize))
+                    }
+                }
+            }
+        }
     }
 }
+
+// Fixed padding between the viewport and the side panel, and between the minimap and the nav
+// grid within it.
+private val PANEL_GAP = 16.dp
+
+// Upper bound on the minimap/nav-grid square — unlike the viewport, they don't grow to fill
+// whatever screen space is available, they just stay centered next to it once this large.
+private val PANEL_MAX_SIZE = NAV_GRID_SIZE
+
+// Lower bound on that same square, and on the viewport's own weighted slot below — without these,
+// an aggressively small window could squeeze either one down to zero.
+private val PANEL_MIN_SIZE = 136.dp
+private val VIEWPORT_MIN_SIZE = 160.dp
+
+// Actual, non-scaling margin between the whole HUD and the screen edges — reserved before the
+// HUD's own aspect ratio is fit to whatever space remains, so the button grid/minimap are never
+// flush against the edge even when that edge is the one binding the aspect ratio.
+private val SCREEN_EDGE_PADDING = 16.dp

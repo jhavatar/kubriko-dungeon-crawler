@@ -28,13 +28,20 @@ import com.pandulapeter.kubriko.types.SceneSize
 // builds a drawCommands list on each position/viewport change; this actor replays it every
 // frame with no actor churn and no layerIndex painter's-algorithm ordering.
 //
-// DrawScope coordinate system:
+// Local coordinate system (matches body.size, NOT DrawScope.size — see below):
 //   (0, 0)          = viewport top-left
 //   (viewW/2, viewH/2) = horizon / scene origin
 //   (viewW, viewH)  = viewport bottom-right
+//
+// Kubriko maps this local space onto real device pixels via a canvas transform applied
+// by ActorManagerImpl (translate + scale by the camera's scaleFactor) before draw() runs;
+// DrawScope.size reports the real pixel canvas size, which only equals (viewW, viewH) when
+// scaleFactor is 1:1 (e.g. ViewportManager.AspectRatioMode.Dynamic). Under Fixed/FitHorizontal/
+// FitVertical modes scaleFactor is usually != 1, so all geometry here must use the viewW/viewH
+// fields below instead of DrawScope.size, or it silently mixes local and device-pixel units.
 class DungeonViewActor(
-    viewW: Float,
-    viewH: Float,
+    private val viewW: Float,
+    private val viewH: Float,
     private val renderMode: () -> RenderMode,
 ) : Actor, Visible {
 
@@ -93,7 +100,7 @@ class DungeonViewActor(
         )
         drawRect(
             color = cmd.ceilColor,
-            topLeft = Offset(cmd.xClipLeft, size.height - cmd.yFloorClipBottom),
+            topLeft = Offset(cmd.xClipLeft, viewH - cmd.yFloorClipBottom),
             size = Size(bandW, bandH),
         )
     }
@@ -103,15 +110,15 @@ class DungeonViewActor(
         val ceilMid  = (cmd.ceilNearBrightness  + cmd.ceilFarBrightness)  / 2f
         val fc = cmd.floorColor.dim(floorMid)
         val cc = cmd.ceilColor.dim(ceilMid)
-        clipRect(left = cmd.xClipLeft, right = cmd.xClipRight, top = 0f, bottom = size.height) {
+        clipRect(left = cmd.xClipLeft, right = cmd.xClipRight, top = 0f, bottom = viewH) {
             // Floor trapezoid: far edge at yFloorClipTop (horizon), near edge at yFloorClipBottom (screen bottom).
             drawLine(fc, Offset(cmd.xFarLeft,  cmd.yFloorClipTop),    Offset(cmd.xFarRight,  cmd.yFloorClipTop),    WIREFRAME_STROKE)
             drawLine(fc, Offset(cmd.xNearLeft, cmd.yFloorClipBottom), Offset(cmd.xNearRight, cmd.yFloorClipBottom), WIREFRAME_STROKE)
             drawLine(fc, Offset(cmd.xFarLeft,  cmd.yFloorClipTop),    Offset(cmd.xNearLeft,  cmd.yFloorClipBottom), WIREFRAME_STROKE)
             drawLine(fc, Offset(cmd.xFarRight, cmd.yFloorClipTop),    Offset(cmd.xNearRight, cmd.yFloorClipBottom), WIREFRAME_STROKE)
             // Ceiling: mirror of floor around the horizon.
-            val ceilTop    = size.height - cmd.yFloorClipBottom
-            val ceilBottom = size.height - cmd.yFloorClipTop
+            val ceilTop    = viewH - cmd.yFloorClipBottom
+            val ceilBottom = viewH - cmd.yFloorClipTop
             drawLine(cc, Offset(cmd.xNearLeft,  ceilTop),    Offset(cmd.xNearRight, ceilTop),    WIREFRAME_STROKE)
             drawLine(cc, Offset(cmd.xFarLeft,   ceilBottom), Offset(cmd.xFarRight,  ceilBottom), WIREFRAME_STROKE)
             drawLine(cc, Offset(cmd.xNearLeft,  ceilTop),    Offset(cmd.xFarLeft,   ceilBottom), WIREFRAME_STROKE)
@@ -131,7 +138,7 @@ class DungeonViewActor(
         // trapezoid's far corners can lie outside the depth-D angular sub-interval clip (Bug 2),
         // and the canvas.clipPath(trapezoidPath) below always enforces the exact shape.
         val bandClipLeft  = minOf(cmd.xClipLeft, cmd.xFarLeft).coerceAtLeast(0f)
-        val bandClipRight = maxOf(cmd.xClipRight, cmd.xFarRight).coerceAtMost(size.width)
+        val bandClipRight = maxOf(cmd.xClipRight, cmd.xFarRight).coerceAtMost(viewW)
 
         // Floor — trapezoid: wide at yFloorClipBottom (near), narrow at yFloorClipTop (far/horizon).
         fillFloorMatrix(cmd, a, isFloor = true)
@@ -167,8 +174,8 @@ class DungeonViewActor(
         }
 
         // Ceiling — mirror of floor around the horizon.
-        val ceilTop    = size.height - cmd.yFloorClipBottom  // near ceiling (top of screen)
-        val ceilBottom = size.height - cmd.yFloorClipTop     // far ceiling (near horizon)
+        val ceilTop    = viewH - cmd.yFloorClipBottom  // near ceiling (top of screen)
+        val ceilBottom = viewH - cmd.yFloorClipTop     // far ceiling (near horizon)
         fillFloorMatrix(cmd, a, isFloor = false)
         trapezoidPath.reset()
         trapezoidPath.moveTo(cmd.xFarLeft,  ceilBottom)
@@ -237,8 +244,8 @@ class DungeonViewActor(
             yF = cmd.yFloorClipTop
             yN = cmd.yFloorClipBottom
         } else {
-            yN = size.height - cmd.yFloorClipBottom  // near ceiling = top of screen
-            yF = size.height - cmd.yFloorClipTop     // far ceiling = bottom of ceiling strip
+            yN = viewH - cmd.yFloorClipBottom  // near ceiling = top of screen
+            yF = viewH - cmd.yFloorClipTop     // far ceiling = bottom of ceiling strip
         }
 
         val widthFar  = cmd.xFarRight  - cmd.xFarLeft
