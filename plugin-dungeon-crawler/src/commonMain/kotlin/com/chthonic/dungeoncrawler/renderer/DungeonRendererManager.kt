@@ -214,7 +214,7 @@ class DungeonRendererManager(
     //   Total: O(D × W × n) = O(D × W²).
     //   For typical blobber values (D=4, W=5): ≈100 iterations per frame — effectively O(1).
     private fun buildDrawCommands(viewW: Float, viewH: Float): List<DrawCommand> {
-        if (debugLogging) log("buildDrawCommands")
+        if (debugLogging) log("buildDrawCommands, frustum angles = ${-frustumAngleHalf}, $frustumAngleHalf")
         val tileMap = tileMapManager.tileMap
         val right = viewer.facing.turnedRight()
         val latMax = fovHalf.toInt()
@@ -406,7 +406,7 @@ class DungeonRendererManager(
                 val tileUNearFraction = if (dEntry <= sideDepth) 0f else
                     ((dEntry - sideDepth) / (D - sideDepth).toFloat()).coerceIn(0f, 1f)
 
-                if (debugLogging) log("buildDrawCommands", "add side wall $wallLat, $sideDepth")
+                if (debugLogging) log("buildDrawCommands", "add side wall $wallLat, $sideDepth -- angles = $sideAngleMin, $sideAngleMax")
                 val (wCellX, wCellY) = if (leftIsWall) leftCellX to leftCellY else rightCellX to rightCellY
                 newSideWallCellsBuffer[wCellX to wCellY] = "$k,$sideDepth"
 
@@ -466,7 +466,7 @@ class DungeonRendererManager(
                 val prevCellX = viewer.cellX + (D - 1) * viewer.facing.dx + lat * right.dx
                 val prevCellY = viewer.cellY + (D - 1) * viewer.facing.dy + lat * right.dy
                 if (tileMap.cellTypeAt(prevCellX, prevCellY) != CellType.WALL) {
-                    if (debugLogging) log("buildDrawCommands", "add front wall $lat, $D")
+                    if (debugLogging) log("buildDrawCommands", "add front wall $lat, $D -- angles = $angleLeft, $angleRight")
                     newFrontWallCellsBuffer[cellX to cellY] = "$lat,$D"
 
                     val slotHeight = viewH * wallHeightScale / D
