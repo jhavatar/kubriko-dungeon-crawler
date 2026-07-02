@@ -12,6 +12,7 @@ import com.pandulapeter.kubriko.manager.ViewportManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.time.measureTime
@@ -19,6 +20,8 @@ import kotlin.time.measureTime
 class DungeonRendererManager(
     // The entity whose position and facing drive the first-person view.
     private val viewer: GridPosition,
+    // Monsters to render as sprites — see buildDrawCommands "Step 4 — monster sprites at depth D".
+    private val monsters: List<Monster> = emptyList(),
     // Controls the angular width of the frustum in cell-widths (fovHalf = fovWidth / 2).
     // Odd values: exactly fovWidth equal-width columns. Even values: (fovWidth - 1) full
     // columns plus two half-width edge columns; total angular coverage is still ±fovHalf.
@@ -30,6 +33,9 @@ class DungeonRendererManager(
     val wallHeightScale: Float = 0.8f,
     // Controls rendering style and carries mode-specific config (colours, atlas, etc.).
     renderMode: RenderMode = RenderMode.Solid(),
+    // Optional monster texture atlas. When null, monster sprites fall back to a flat
+    // placeholder colour in every render mode (see DungeonViewActor.drawSprite).
+    private val monsterAtlas: MonsterAtlas? = null,
     // When non-null, called once per wall strip to produce a debug label overlay.
     // Receives the label text and true for a side wall / false for a front wall.
     private val debugLabelProvider: ((text: String, isSideWall: Boolean) -> TextLayoutResult?)? = null,
@@ -67,6 +73,7 @@ class DungeonRendererManager(
     private val drawCommandsBuffer = mutableListOf<DrawCommand>()
     private val newFrontWallCellsBuffer = mutableMapOf<Pair<Int, Int>, String>()
     private val newSideWallCellsBuffer = mutableMapOf<Pair<Int, Int>, String>()
+    private val newVisibleOpenCellsBuffer = mutableSetOf<Pair<Int, Int>>()
 
     // Angular occlusion buffer tracking which frustum sub-intervals are covered by solid walls.
     private val occlusionBuffer = AngularOcclusionBuffer(-frustumAngleHalf, frustumAngleHalf)
@@ -84,6 +91,14 @@ class DungeonRendererManager(
     private val _sideWallCells = MutableStateFlow<Map<Pair<Int, Int>, String>>(emptyMap())
     val sideWallCells: StateFlow<Map<Pair<Int, Int>, String>> = _sideWallCells.asStateFlow()
 
+    // Set of open (mapCellX, mapCellY) cells with at least one on-screen pixel this frame — i.e.
+    // survived angular-occlusion culling, not just "inside the raw geometric frustum triangle".
+    // A minimap (or similar overlay) can use this to highlight exactly what's actually visible,
+    // including cells hidden around a corner being correctly excluded. Wall cells are already
+    // covered by frontWallCells/sideWallCells above, so this only tracks open (floor) cells.
+    private val _visibleOpenCells = MutableStateFlow<Set<Pair<Int, Int>>>(emptySet())
+    val visibleOpenCells: StateFlow<Set<Pair<Int, Int>>> = _visibleOpenCells.asStateFlow()
+
     override fun onUpdate(deltaTimeInMilliseconds: Int) {
         val viewW = (viewportManager.bottomRight.value.x - viewportManager.topLeft.value.x).raw
         val viewH = (viewportManager.bottomRight.value.y - viewportManager.topLeft.value.y).raw
@@ -93,11 +108,33 @@ class DungeonRendererManager(
         val positionChanged =
             viewer.cellX != lastCellX || viewer.cellY != lastCellY || viewer.facing != lastFacing
         val modeChanged = renderMode != lastRenderMode
-        if (!positionChanged && !viewChanged && !modeChanged) return
+
+        // Dirty-check for monsters: a rebuild is only needed when a monster's movement or
+        // animation could change a pixel currently on screen — it was potentially visible
+        // before this change, or is potentially visible now (the "before" half is what catches
+        // a monster leaving the frustum). Uses a plain loop rather than `List.any {}` so every
+        // monster's bookkeeping refreshes even after an earlier monster has already forced
+        // monstersChanged = true — `any`'s short-circuit would otherwise freeze later monsters'
+        // lastCellX/wasPotentiallyVisible and could miss their own enter/leave transitions.
+        // See docs/MonsterImplementationPlan.md "Triggering a rebuild on monster movement".
+        var monstersChanged = false
+        for (m in monsters) {
+            val moved = m.mob.cellX != m.lastCellX || m.mob.cellY != m.lastCellY || m.mob.facing != m.lastFacing
+            val animated = m.frameIndex != m.lastFrameIndex
+            val nowVisible = isPotentiallyVisible(m.mob.cellX, m.mob.cellY)
+            if ((moved || animated) && (m.wasPotentiallyVisible || nowVisible)) monstersChanged = true
+            m.lastCellX = m.mob.cellX
+            m.lastCellY = m.mob.cellY
+            m.lastFacing = m.mob.facing
+            m.lastFrameIndex = m.frameIndex
+            m.wasPotentiallyVisible = nowVisible
+        }
+
+        if (!positionChanged && !viewChanged && !modeChanged && !monstersChanged) return
 
         if (viewChanged || dungeonViewActor == null) {
             dungeonViewActor?.let { actorManager.remove(it) }
-            val actor = DungeonViewActor(viewW, viewH, renderMode = { renderMode })
+            val actor = DungeonViewActor(viewW, viewH, renderMode = { renderMode }, monsterAtlas = monsterAtlas)
             dungeonViewActor = actor
             actorManager.add(actor)
         }
@@ -220,6 +257,7 @@ class DungeonRendererManager(
         val latMax = fovHalf.toInt()
         newFrontWallCellsBuffer.clear()
         newSideWallCellsBuffer.clear()
+        newVisibleOpenCellsBuffer.clear()
         drawCommandsBuffer.clear()
         val colorTheme = when (val m = renderMode) {
             is RenderMode.Solid -> m.colorTheme
@@ -295,6 +333,8 @@ class DungeonRendererManager(
                 else listOf(Interval(angleLeft, angleRight))
                 if (nearSubIntervals.isEmpty()) continue
                 emitFloorCeiling(
+                    cellX = nCellX,
+                    cellY = nCellY,
                     angleToX = angleToX,
                     viewW = viewW,
                     yTop = wallBottomY(1),
@@ -559,6 +599,8 @@ class DungeonRendererManager(
                 else listOf(Interval(angleLeft, angleRight))
                 if (fcSubIntervals.isEmpty()) continue
                 emitFloorCeiling(
+                    cellX = fCellX,
+                    cellY = fCellY,
                     angleToX = angleToX,
                     viewW = viewW,
                     yTop = wallBottomY(D + 1),
@@ -579,6 +621,62 @@ class DungeonRendererManager(
                 )
             }
 
+            // ---------------------------------------------------------------------------------
+            // Step 4 — monster sprites at depth D.
+            //
+            // Runs after Step 3's coverage update for this D, so a monster's occlusion check
+            // (below) sees coverage merged by any nearer wall (depths < D) — see
+            // docs/MonsterImplementationPlan.md "Visibility (occlusion by nearer walls)". Not
+            // nested in the `D < viewDistance` floor/ceiling guard above: a monster at the far
+            // clip boundary should still be visible, same as a front wall at that depth.
+            //
+            // A monster's own footprint is narrower than its cell (spriteWidthFraction), so its
+            // occlusion interval is computed from that footprint, not the full cell — and unlike
+            // a wall, a monster never merges coverage back into occlusionBuffer: its silhouette
+            // doesn't hide real floor/ceiling or farther walls legitimately visible around it.
+            // ---------------------------------------------------------------------------------
+            for (monster in monsters) {
+                val (mDepth, mLat) = relativeDepthLat(monster.mob.cellX, monster.mob.cellY)
+                if (mDepth != D) continue
+                if (!isInFrustum(mLat - 0.5f, mLat + 0.5f, D)) continue
+
+                val halfWidthLat = monster.spriteWidthFraction * 0.5f
+                val mAngleLeft  = maxOf((mLat - halfWidthLat) / D, -frustumAngleHalf)
+                val mAngleRight = minOf((mLat + halfWidthLat) / D,  frustumAngleHalf)
+                if (mAngleLeft >= mAngleRight) continue
+                val mSubIntervals = occlusionBuffer.subtract(Interval(mAngleLeft, mAngleRight))
+                if (mSubIntervals.isEmpty()) continue // fully hidden behind a nearer wall
+
+                val mSlotHeight = viewH * wallHeightScale / D
+                val mYBottom = wallBottomY(D)
+                val mYTop = mYBottom - monster.spriteHeightFraction * mSlotHeight
+                val direction = viewDirectionOf(monster.mob)
+                val frames = monster.currentAnimation.framesFor(direction)
+                val mTileIndex = frames[monster.frameIndex % frames.size]
+                val mBrightness = torchBrightness(hypot(D.toFloat(), mLat.toFloat()))
+                val xSpriteLeft_ds = mAngleLeft.toDsX()
+                val xSpriteRight_ds = mAngleRight.toDsX()
+
+                // A monster can legitimately produce more than one Sprite command in a frame
+                // if it's peeking past a thin obstruction with visible slivers on both sides.
+                mSubIntervals.forEach { (lo, hi) ->
+                    drawCommandsBuffer.add(
+                        DrawCommand.Sprite(
+                            xLeft = lo.toDsX(),
+                            xRight = hi.toDsX(),
+                            xSpriteLeft = xSpriteLeft_ds,
+                            xSpriteRight = xSpriteRight_ds,
+                            yTop = mYTop,
+                            yBottom = mYBottom,
+                            tileIndex = mTileIndex,
+                            color = MONSTER_PLACEHOLDER_COLOR,
+                            brightness = mBrightness,
+                            depth = D,
+                        )
+                    )
+                }
+            }
+
             // Early exit: once the entire frustum is covered, no geometry at greater depths
             // can be visible — every subtract() would return empty. Break before the next D.
             if (occlusionBuffer.isFull) break
@@ -588,6 +686,8 @@ class DungeonRendererManager(
             newFrontWallCellsBuffer.toMap()
         if (newSideWallCellsBuffer != _sideWallCells.value) _sideWallCells.value =
             newSideWallCellsBuffer.toMap()
+        if (newVisibleOpenCellsBuffer != _visibleOpenCells.value) _visibleOpenCells.value =
+            newVisibleOpenCellsBuffer.toSet()
 
         return drawCommandsBuffer
     }
@@ -606,6 +706,11 @@ class DungeonRendererManager(
         //   dist  4.0  (D=4, lat=0)  →  0.30
         const val TORCH_K = 0.4f
         const val MIN_BRIGHTNESS = 0.2f
+
+        // Flat fallback colour for monster sprites when no MonsterAtlas is supplied (or in
+        // WIREFRAME/SOLID mode) — deliberately distinct from the wall/floor/ceiling palette so
+        // a monster placeholder reads as "not architecture" even without real sprite art.
+        val MONSTER_PLACEHOLDER_COLOR = Color(0.8f, 0.2f, 0.3f)
     }
 
     // Returns true when the cell slot [latLeft, latRight] has any angular overlap with the visible
@@ -619,11 +724,59 @@ class DungeonRendererManager(
         return maxOf(latLeft, -visibleLatHalf) < minOf(latRight, visibleLatHalf)
     }
 
+    // Converts an absolute cell to (depth, lat) relative to the viewer — the inverse of the
+    // `cellX = viewer.cellX + D*facing.dx + lat*right.dx` projection used throughout
+    // buildDrawCommands. Used both for the cheap dirty-check pre-check (isPotentiallyVisible)
+    // and to place a monster within the D loop in buildDrawCommands.
+    private fun relativeDepthLat(cellX: Int, cellY: Int): Pair<Int, Int> {
+        val right = viewer.facing.turnedRight()
+        val dx = cellX - viewer.cellX
+        val dy = cellY - viewer.cellY
+        val depth = dx * viewer.facing.dx + dy * viewer.facing.dy
+        val lat = dx * right.dx + dy * right.dy
+        return depth to lat
+    }
+
+    // Cheap, coarse "could this cell possibly be on screen" pre-check — the frustum test only,
+    // not the occlusion-culled one buildDrawCommands does. Deliberately a superset of "actually
+    // visible after wall occlusion", so it can never cause the monster dirty-check to miss a
+    // rebuild that's genuinely needed; it can only occasionally trigger one that turns out to be
+    // unnecessary (a monster moving while hidden behind a nearer wall). See
+    // docs/MonsterImplementationPlan.md "Scoping the check to the current frustum".
+    private fun isPotentiallyVisible(cellX: Int, cellY: Int): Boolean {
+        val (depth, lat) = relativeDepthLat(cellX, cellY)
+        return depth in 1..viewDistance && isInFrustum(lat - 0.5f, lat + 0.5f, depth)
+    }
+
+    // Buckets the vector from a monster to the viewer against the monster's own facing/right
+    // vectors to decide which of its 4 body-relative sprites (front/back/left/right) is showing.
+    // This is independent of the monster's screen position (lat, D) — a monster far off to one
+    // side of the frustum still picks its sprite the same way as one dead ahead. See
+    // docs/MonsterImplementationPlan.md "Facing-dependent sprites".
+    private fun viewDirectionOf(monster: GridPosition): MonsterViewDirection {
+        val facing = monster.facing
+        val right = facing.turnedRight()
+        val dx = viewer.cellX - monster.cellX
+        val dy = viewer.cellY - monster.cellY
+        val forward = dx * facing.dx + dy * facing.dy     // >0: monster is facing the viewer
+        val rightSide = dx * right.dx + dy * right.dy     // >0: viewer is on the monster's right
+        return if (abs(forward) >= abs(rightSide)) {
+            if (forward > 0) MonsterViewDirection.FRONT else MonsterViewDirection.BACK
+        } else {
+            if (rightSide > 0) MonsterViewDirection.RIGHT else MonsterViewDirection.LEFT
+        }
+    }
+
     // Emits floor and ceiling bands for each visible angular sub-interval of a cell slot.
     // angleToX and viewW are passed from buildDrawCommands so the method does not need the local
     // toDsX extension (which is only in scope inside buildDrawCommands).
     // xNear*/xFar* are the full perspective quad corners for perspective-correct texture mapping.
     private fun emitFloorCeiling(
+        // Map-space coordinates of the open cell this slot belongs to — recorded into
+        // newVisibleOpenCellsBuffer below regardless of how many sub-intervals the cell's
+        // visible angular range splits into, since it's still the same one underlying cell.
+        cellX: Int,
+        cellY: Int,
         angleToX: Float,
         viewW: Float,
         yTop: Float,
@@ -643,6 +796,7 @@ class DungeonRendererManager(
         ceilNearBrightness: Float = 1f,
         ceilFarBrightness: Float = 1f,
     ) {
+        newVisibleOpenCellsBuffer.add(cellX to cellY)
         for ((lo, hi) in subIntervals) {
             drawCommandsBuffer.add(
                 DrawCommand.FloorCeilingBand(

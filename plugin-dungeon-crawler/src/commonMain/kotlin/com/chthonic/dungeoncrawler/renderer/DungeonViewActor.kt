@@ -43,6 +43,7 @@ class DungeonViewActor(
     private val viewW: Float,
     private val viewH: Float,
     private val renderMode: () -> RenderMode,
+    private val monsterAtlas: MonsterAtlas? = null,
 ) : Actor, Visible {
 
     override val layerIndex = 0
@@ -85,9 +86,19 @@ class DungeonViewActor(
             when (cmd) {
                 is DrawCommand.FrontStrip -> drawFrontStrip(cmd, mode, texturedAtlas)
                 is DrawCommand.SideStrip -> drawSideStrip(cmd, mode, texturedAtlas)
-                is DrawCommand.FloorCeilingBand -> {}
+                is DrawCommand.FloorCeilingBand, is DrawCommand.Sprite -> {}
             }
         }
+        // Pass 3: monster sprites, back-to-front (farthest first). Unlike walls — where the
+        // angular occlusion buffer guarantees no two commands ever cover the same screen
+        // pixels, so append order doesn't matter — a monster's footprint is a proper subset of
+        // its cell, so sprites CAN overlap each other (one monster standing behind another) or
+        // sit in front of farther background geometry that's still legitimately drawn around
+        // their silhouette. Sorting back-to-front makes a nearer monster correctly paint over
+        // both. See docs/MonsterImplementationPlan.md "Draw order".
+        drawCommands.filterIsInstance<DrawCommand.Sprite>()
+            .sortedByDescending { it.depth }
+            .forEach { drawSprite(it, mode, monsterAtlas) }
     }
 
     private fun DrawScope.drawFloorCeiling(cmd: DrawCommand.FloorCeilingBand) {
@@ -481,6 +492,59 @@ class DungeonViewActor(
         v[4]  = h01;  v[5]  = h11;  v[6]  = 0f;  v[7]  = h21   // col 1
         v[8]  = 0f;   v[9]  = 0f;   v[10] = 1f;  v[11] = 0f    // col 2 (Z)
         v[12] = h02;  v[13] = h12;  v[14] = 0f;  v[15] = h22   // col 3
+    }
+
+    // A monster is always a flat camera-facing billboard — never a trapezoid — so it never
+    // needs the perspective-skew matrix side walls use, just a straightforward scaled
+    // drawImage (or a flat rect fallback), mirroring drawFrontStrip's textured branch.
+    private fun DrawScope.drawSprite(cmd: DrawCommand.Sprite, mode: RenderMode, atlas: MonsterAtlas?) {
+        when (mode) {
+            is RenderMode.Wireframe -> {
+                val c = cmd.color.dim(cmd.brightness)
+                drawLine(c, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xRight, cmd.yTop), WIREFRAME_STROKE)
+                drawLine(c, Offset(cmd.xLeft, cmd.yBottom), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
+                drawLine(c, Offset(cmd.xLeft, cmd.yTop), Offset(cmd.xLeft, cmd.yBottom), WIREFRAME_STROKE)
+                drawLine(c, Offset(cmd.xRight, cmd.yTop), Offset(cmd.xRight, cmd.yBottom), WIREFRAME_STROKE)
+            }
+            is RenderMode.Solid -> {
+                drawRect(
+                    color = cmd.color.dim(cmd.brightness),
+                    topLeft = Offset(cmd.xLeft, cmd.yTop),
+                    size = Size(cmd.xRight - cmd.xLeft, cmd.yBottom - cmd.yTop),
+                )
+            }
+            is RenderMode.Textured -> {
+                if (atlas != null) {
+                    // Partial occlusion: sample only the visible slice of the sprite's own
+                    // footprint, not the whole tile squeezed into the clipped box — same
+                    // technique as FrontStrip's uLeft/uRight (see drawFrontStrip above).
+                    val spriteW = cmd.xSpriteRight - cmd.xSpriteLeft
+                    val uLeft  = if (spriteW > 0f) (cmd.xLeft  - cmd.xSpriteLeft) / spriteW else 0f
+                    val uRight = if (spriteW > 0f) (cmd.xRight - cmd.xSpriteLeft) / spriteW else 1f
+                    val tileLeft = (cmd.tileIndex % atlas.cols) * atlas.tileSize
+                    val tileTop  = (cmd.tileIndex / atlas.cols) * atlas.tileSize
+                    val srcX = (tileLeft + uLeft * atlas.tileSize).toInt()
+                    val srcW = ((uRight - uLeft) * atlas.tileSize).toInt().coerceAtLeast(1)
+                    drawImage(
+                        image = atlas.image,
+                        srcOffset = IntOffset(srcX, tileTop),
+                        srcSize = IntSize(srcW, atlas.tileSize),
+                        dstOffset = IntOffset(cmd.xLeft.toInt(), cmd.yTop.toInt()),
+                        dstSize = IntSize(
+                            (cmd.xRight - cmd.xLeft).toInt().coerceAtLeast(1),
+                            (cmd.yBottom - cmd.yTop).toInt().coerceAtLeast(1),
+                        ),
+                        colorFilter = brightnessFilter(cmd.brightness),
+                    )
+                } else {
+                    drawRect(
+                        color = cmd.color.dim(cmd.brightness),
+                        topLeft = Offset(cmd.xLeft, cmd.yTop),
+                        size = Size(cmd.xRight - cmd.xLeft, cmd.yBottom - cmd.yTop),
+                    )
+                }
+            }
+        }
     }
 
     private companion object {

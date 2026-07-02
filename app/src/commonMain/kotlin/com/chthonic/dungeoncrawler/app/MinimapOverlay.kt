@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -15,6 +16,11 @@ import androidx.compose.ui.unit.sp
 import com.chthonic.dungeoncrawler.tilemap.CellType
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.TileMap
+
+// Immutable per-frame snapshot of a monster's position/facing for the minimap — mirrors how
+// the party's own position is snapshotted into a Compose state (see App.kt's ViewerSnapshot),
+// since Monster itself is mutated by MonsterManager on the engine tick, not by Compose.
+data class MonsterMarker(val cellX: Int, val cellY: Int, val facing: Facing)
 
 @Composable
 fun MinimapOverlay(
@@ -26,6 +32,8 @@ fun MinimapOverlay(
     viewDistance: Int,
     frontWallCells: Map<Pair<Int, Int>, String> = emptyMap(),
     sideWallCells: Map<Pair<Int, Int>, String> = emptyMap(),
+    visibleOpenCells: Set<Pair<Int, Int>> = emptySet(),
+    monsters: List<MonsterMarker> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val textMeasurer = rememberTextMeasurer()
@@ -51,7 +59,25 @@ fun MinimapOverlay(
             }
         }
 
-        // Frustum: apex at the back edge of the party's cell; far corners ±fovHalf right at viewDistance.
+        // Visibility highlight: one translucent tint per open cell that actually has an
+        // on-screen pixel this frame (DungeonRendererManager.visibleOpenCells — survived
+        // angular-occlusion culling, not just "inside the raw geometric FOV triangle"). Cells
+        // hidden around a corner are correctly left untinted; wall cells get their own more
+        // specific yellow/cyan highlight below instead of this generic tint.
+        visibleOpenCells.forEach { (vx, vy) ->
+            drawRect(
+                color = Color(0x40FFEE44),
+                topLeft = Offset(originX + vx * cellSize, originY + vy * cellSize),
+                size = Size(cellSize, cellSize),
+            )
+        }
+
+        // Frustum outline: apex at the back edge of the party's cell; far corners ±fovHalf
+        // right at viewDistance. This is the raw geometric FOV wedge (unlike the cell-accurate
+        // tint above, it doesn't account for occlusion), so it's clipped to the map's own
+        // rectangle — clipRect does real line-segment clipping, not just a visibility toggle,
+        // so an edge that exits the map partway through is cut off exactly at the boundary
+        // instead of the whole line disappearing or overshooting into the letterboxed margin.
         val right = facing.turnedRight()
         val fovHalf = fovWidth / 2f
         val apexCellX = cellX + 0.5f - 0.5f * facing.dx
@@ -73,8 +99,9 @@ fun MinimapOverlay(
             lineTo(farRight.x, farRight.y)
             close()
         }
-        drawPath(frustumPath, color = Color(0x26FFEE44))
-        drawPath(frustumPath, color = Color(0xCCFFEE44), style = Stroke(width = 1f))
+        clipRect(left = originX, top = originY, right = originX + tileMap.width * cellSize, bottom = originY + tileMap.height * cellSize) {
+            drawPath(frustumPath, color = Color(0xCCFFEE44), style = Stroke(width = 1f))
+        }
 
         val labelStyle = TextStyle(fontSize = 6.sp, color = Color.Black)
 
@@ -108,6 +135,22 @@ fun MinimapOverlay(
                 originX + (wCellX + 0.5f) * cellSize - layout.size.width / 2f,
                 originY + (wCellY + 0.5f) * cellSize - layout.size.height / 2f,
             ))
+        }
+
+        // Monster markers — drawn before the party marker so the party stays on top if they
+        // ever share a cell. Colour matches DungeonRendererManager.MONSTER_PLACEHOLDER_COLOR
+        // so the minimap dot and the 3D placeholder sprite read as the same entity.
+        monsters.forEach { monster ->
+            val mCx = originX + (monster.cellX + 0.5f) * cellSize
+            val mCy = originY + (monster.cellY + 0.5f) * cellSize
+            drawCircle(color = Color(0xFFCC334D), radius = cellSize * 0.2f, center = Offset(mCx, mCy))
+            val mArrowLen = cellSize * 0.35f
+            drawLine(
+                color = Color(0xFFFFFFFF),
+                start = Offset(mCx, mCy),
+                end = Offset(mCx + monster.facing.dx * mArrowLen, mCy + monster.facing.dy * mArrowLen),
+                strokeWidth = 1.5f,
+            )
         }
 
         val partyCx = originX + (cellX + 0.5f) * cellSize

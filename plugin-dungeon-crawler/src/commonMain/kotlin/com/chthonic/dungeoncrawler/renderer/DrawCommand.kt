@@ -94,4 +94,28 @@ sealed class DrawCommand {
         val tileUNearFraction: Float = 0f,
         val debugLabel: TextLayoutResult? = null,
     ) : DrawCommand()
+
+    // A monster's screen footprint for one visible angular sub-interval — always a flat
+    // camera-facing billboard (no perspective skew, unlike SideStrip).
+    //
+    // xLeft/xRight are the occlusion-clipped bounds actually drawn; xSpriteLeft/xSpriteRight
+    // are the full unclipped footprint, used to compute which slice of the tile is visible
+    // when a monster is partially occluded (mirrors FrontStrip.xWallLeft/xWallRight).
+    data class Sprite(
+        val xLeft: Float,
+        val xRight: Float,
+        val xSpriteLeft: Float,
+        val xSpriteRight: Float,
+        val yTop: Float,
+        val yBottom: Float,
+        val tileIndex: Int,
+        val color: Color,
+        // 0..1 brightness used in TEXTURED mode (applied via grayscale ColorFilter.Multiply)
+        // and dimmed into `color` for WIREFRAME/SOLID, matching FrontStrip/SideStrip.
+        val brightness: Float = 1f,
+        // Depth of the monster's own cell. Sprites — unlike walls — can overlap each other in
+        // screen space, so DungeonViewActor sorts by this for back-to-front painter's-algorithm
+        // ordering; see DungeonViewActor's Pass 3.
+        val depth: Int,
+    ) : DrawCommand()
 }

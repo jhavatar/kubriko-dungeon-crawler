@@ -82,6 +82,40 @@ These are the most fragile — the perspective homography has multiple special c
 
 ---
 
+## Monster checks
+
+First-pass monsters render as a flat placeholder-coloured rect (no `MonsterAtlas` is wired up yet — see `docs/MonsterImplementationPlan.md`), so MON-4 and MON-5 below can't be fully verified until real directional sprite art exists. MON-1/2/3 are checkable today against the placeholder.
+
+### MON-1 — visible at correct depth/size
+
+**Position:** face down a corridor the monster is patrolling in.
+**Pass:** the placeholder rect sits on the floor line at its cell's depth, scaled consistent with `spriteWidthFraction`/`spriteHeightFraction` (narrower/shorter than a full wall face), shrinking as depth increases.
+**Fail signals:** rect fills the full cell (wall-to-wall); size doesn't change with depth; rect floats above or below the floor line.
+
+### MON-2 — occluded by nearer wall
+
+**Position:** stand so a wall is between you and the monster.
+**Pass:** the monster is not drawn at all.
+**Fail signals:** monster renders through a wall.
+
+### MON-3 — nearer monster occludes farther monster/background
+
+**Position:** (requires 2+ monsters in the same lat column at different depths — not in the first-pass single-monster wiring in `App.kt`, add a second monster temporarily to check this.)
+**Pass:** the nearer monster's rect is drawn on top of the farther one and of any background geometry visible around its silhouette.
+**Fail signals:** farther monster or background painted over the nearer monster.
+
+### MON-4 — partial occlusion around a corner (blocked until real art)
+
+**Position:** round a corner so only part of a monster's cell is visible.
+**Pass (once `MonsterAtlas` + real art exist):** the visible slice of the sprite is a clipped crop, not the whole sprite squashed into the visible width.
+**Note:** with the placeholder flat-colour rect, a clipped rect and a squashed rect look identical — this check needs real texture art to be meaningful.
+
+### MON-5 — correct front/back/left/right sprite (blocked until directional art)
+
+**Position:** walk a full circle around a stationary monster.
+**Pass (once directional art exists):** the sprite shown changes between the monster's front/back/left/right tiles as your relative position changes, matching `DungeonRendererManager.viewDirectionOf`.
+**Note:** first-pass `MonsterAnimation.single(...)` points all 4 directions at the same tile, so this is not yet visually distinguishable.
+
 ## Cross-mode checks (run in all three modes)
 
 ### CM-1 — mode switch produces no crash

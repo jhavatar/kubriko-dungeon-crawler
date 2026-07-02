@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chthonic.dungeoncrawler.renderer.DungeonAtlas
 import com.chthonic.dungeoncrawler.renderer.DungeonRendererManager
+import com.chthonic.dungeoncrawler.renderer.Monster
+import com.chthonic.dungeoncrawler.renderer.MonsterAnimation
 import com.chthonic.dungeoncrawler.renderer.RenderMode
 import com.chthonic.dungeoncrawler.tilemap.Facing
 import com.chthonic.dungeoncrawler.tilemap.Mob
@@ -50,6 +52,9 @@ import kubriko_dungeon_crawler.app.generated.resources.dungeon_atlas
 import org.jetbrains.compose.resources.imageResource
 
 private data class ViewerSnapshot(val cellX: Int, val cellY: Int, val facing: Facing)
+
+private fun List<Monster>.toMinimapMarkers(): List<MonsterMarker> =
+    map { MonsterMarker(it.mob.cellX, it.mob.cellY, it.mob.facing) }
 
 @Composable
 fun DungeonCrawlerApp() {
@@ -91,6 +96,29 @@ fun DungeonCrawlerApp() {
             isLoggingEnabled = true,
         )
     }
+
+    // First-pass monster: no MonsterAtlas is wired up yet (no sprite art exists), so it renders
+    // via the flat placeholder-colour fallback in DungeonViewActor.drawSprite regardless of
+    // renderMode. See docs/MonsterImplementationPlan.md.
+    val monsters = remember {
+        listOf(
+            Monster(
+                mob = Mob(initialCellX = 8, initialCellY = 3, initialFacing = Facing.WEST),
+                currentAnimation = MonsterAnimation.single(tileIndex = 0),
+            )
+        )
+    }
+    // Monster is mutated by MonsterManager on the engine tick, not by Compose, so the minimap
+    // needs its own snapshot state refreshed via a callback — same pattern as viewerSnapshot.
+    var monsterMarkers by remember { mutableStateOf(monsters.toMinimapMarkers()) }
+    val monsterManager = remember {
+        MonsterManager(
+            monsters = monsters,
+            tileMapManager = tileMapManager,
+            onMonstersChanged = { monsterMarkers = monsters.toMinimapMarkers() },
+            isLoggingEnabled = true,
+        )
+    }
     val atlasImage = imageResource(Res.drawable.dungeon_atlas)
     val textMeasurer = rememberTextMeasurer()
     val dungeonRenderer = remember(atlasImage) {
@@ -101,6 +129,7 @@ fun DungeonCrawlerApp() {
         DungeonRendererManager(
             fovWidth = 5,
             viewer = viewer,
+            monsters = monsters,
 //            renderMode = RenderMode.Wireframe(),
 //            renderMode = RenderMode.Solid(),
             renderMode = RenderMode.Textured(
@@ -127,6 +156,7 @@ fun DungeonCrawlerApp() {
     val kubriko = remember {
         Kubriko.newInstance(
             tileMapManager,
+            monsterManager,
             dungeonRenderer,
             playerManager,
             KeyboardInputManager.newInstance(),
@@ -150,6 +180,7 @@ fun DungeonCrawlerApp() {
 
     val frontWallCells by dungeonRenderer.frontWallCells.collectAsState()
     val sideWallCells by dungeonRenderer.sideWallCells.collectAsState()
+    val visibleOpenCells by dungeonRenderer.visibleOpenCells.collectAsState()
     val pressedActions by playerManager.pressedActions.collectAsState()
 
     BoxWithConstraints(
@@ -179,6 +210,8 @@ fun DungeonCrawlerApp() {
                 viewDistance = dungeonRenderer.viewDistance,
                 frontWallCells = frontWallCells,
                 sideWallCells = sideWallCells,
+                visibleOpenCells = visibleOpenCells,
+                monsters = monsterMarkers,
                 // Callers always give this the same weight/fillMax modifiers as the nav button
                 // grid, so it always matches the grid's overall footprint exactly.
                 modifier = minimapModifier,
